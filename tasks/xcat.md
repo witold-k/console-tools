@@ -1,7 +1,7 @@
 - please got to repo https://github.com/witold-k/buildscripts and examine
  lua/bin/xcat.lua
 
- - i need s simulat functionality as rust application:
+ - i need simular functionality as rust application:
 
  - additionally i need a config file, like in agagens with same file suffixes.
  - also auto creation if not availabe
@@ -19,3 +19,8 @@
         - *.sh call bash
         - *.ps1 call powershell
     - xcat -h also offer detailed help with some examples
+
+    - -r standalone (searched for exe)
+
+    - also provide excutable jvm build.
+
