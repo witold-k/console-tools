@@ -22,7 +22,7 @@ Wayland or **xclip** / **xsel** for X11. Windows uses PowerShell
 | --- | --- |
 | `xcat` | Scan the current working directory and copy selected files |
 | `xcat -d /path/to/project` | Scan a specific directory |
-| `xcat -e ./test.sh -- --verbose` | Scan, copy, execute a shell script, then copy scan + output |
+| `xcat -r script.py -- --verbose` | Run only the task, auto-select launcher, copy its output |\n| `xcat -e ./test.sh -- --verbose` | Scan, copy, execute a shell script, then copy scan + output |
 | `xcat -d project -e Justfile -- build` | Scan `project`, run its Justfile's `build` recipe |
 | `xcat -e Makefile -- test` | Scan and execute `make -f Makefile test` |
 | `xcat -e script.ps1 -- -Verbose` | Execute a PowerShell script |
@@ -34,6 +34,116 @@ Wayland or **xclip** / **xsel** for X11. Windows uses PowerShell
 directory unless absolute. `-c` / `--config` overrides the config location.
 Everything after `--` is passed unchanged to the task, without shell
 interpolation. Arguments after `--` require `-e`.
+
+## Standalone execution (`-r`)
+
+`xcat -r <file> [-- args...]` runs a file without scanning the project.
+The clipboard receives labeled stdout, stderr, and exit status. Unlike `-e`,
+it does not copy source files first. An executable file is launched directly;
+non-executable scripts use an interpreter selected from their extension
+(`.sh`, `.bash`, `.py`, `.lua`, `.rb`, `.pl`, `.js`, `.mjs`, `.ps1`).
+Justfile and Makefile are launched through `just` and `make`. Unknown
+non-executable formats fail with an explicit error. Required interpreters
+must be installed. This executes local code, so only run trusted files.
+
+## Experimental JVM backend
+
+The upstream `rustc_codegen_jvm` backend currently lists `std::process`
+(child process creation and management) as **planned**, not supported.
+Both `xcat` and `cptx` require it. Therefore the JVM recipes below are
+experimental diagnostics, **not a fully verified JVM release**.
+
+Requirements: Rust/rustup, JDK 8+ (`java`, `javac`, `jar`), Python 3.8+ and Git.
+`cargo-jvm` installs the pinned nightly and builds the backend during setup.
+
+```sh
+just jvm-setup       # cargo install cargo-jvm; cargo jvm setup; doctor
+just jvm-smoke       # attempt to run xcat --help on JVM
+just build-jvm       # attempt to compile xcat and cptx
+just jvm-package     # attempt to package runnable JARs
+just jvm-artifacts   # list resulting artifacts
+```
+
+JVM compilation and the application help screens have been observed to work
+with the backend runtime on the classpath. Full application functionality,
+especially process execution, remains unverified and may fail. Native `just rbuild` remains the supported release path.
+See https://github.com/IntegralPilot/rustc_codegen_jvm for backend status.
+
+## Just recipes
+
+Run `just --list` to inspect the available recipes. The default `just`
+command runs `build`. Recipes that invoke `pull` can update the local
+checkout; `install` changes the locally installed binaries. JVM builds use
+`CARGO_TARGET_DIR=target` to keep their artifacts in this repository.
+
+| Recipe | Description |
+| --- | --- |
+| `just`, `just build` | Native debug build via `build.py` |
+| `just build-release` | Native release build via `build.py` |
+| `just pull` | Pull project changes via `build.py github_pull` |
+| `just gbuild` | Pull and run a native debug build |
+| `just rbuild` | Pull, build native release binaries, and install |
+| `just install` | Build release, run Clippy, and `cargo install --path .` |
+| `just clear` | Clear tmux history (if available) and terminal screen |
+| `just clean` | Delete `Cargo.lock` and clean this Cargo package |
+| `just clean-all` | Run `cargo clean` for the workspace |
+| `just targetlist` | List available rustup targets |
+| `just rpi` | Cross-compile for `aarch64-unknown-linux-gnu` |
+| `just cover-setup` | Install `cargo-llvm-cov` and LLVM tools |
+| `just cover` | Produce HTML coverage |
+| `just cover-lcov` | Produce LCOV coverage |
+| `just cover-text` | Print terminal coverage |
+| `just jvm-target-dir` | Prepare backend-local target directory |
+| `just jvm-setup` | Install/setup `cargo-jvm` and run doctor |
+| `just build-jvm` | Compile both programs for the JVM |
+| `just jvm-package` | Package original JVM release JARs |
+| `just jvm-distributions` | Build both thin and standalone JAR layouts |
+| `just jvm-test-distributions` | Build both layouts and run four `--help` smoke tests |
+| `just jvm-smoke` | Run `xcat --help` via `cargo jvm run` |
+| `just jvm-artifacts` | List original JVM JAR and class artifacts |
+
+### JVM distribution layouts
+
+`just jvm-distributions` depends on `jvm-package`, so it rebuilds both
+original release JARs before preparing the distributions:
+
+```text
+target/jvm-package/release/
+  xcat.jar
+  cptx.jar
+target/jvm-dist/
+  thin/
+    xcat.jar
+    cptx.jar
+    runtime-0.1.0.jar
+  standalone/
+    xcat.jar
+    cptx.jar
+```
+
+The **thin** JARs refer to the adjacent `runtime-0.1.0.jar` through
+their manifest `Class-Path`; distribute that runtime JAR alongside
+either application JAR. The **standalone** JARs merge the backend runtime
+classes into each application JAR and do not require a separate runtime
+JAR. Both approaches still require Java and any external tools used by
+the applications (for example, tmux and clipboard utilities).
+
+```sh
+just jvm-distributions
+java -jar target/jvm-dist/thin/xcat.jar --help
+java -jar target/jvm-dist/thin/cptx.jar --help
+java -jar target/jvm-dist/standalone/xcat.jar --help
+java -jar target/jvm-dist/standalone/cptx.jar --help
+
+# Or build and smoke-test all four in one command:
+just jvm-test-distributions
+```
+
+The `--help` tests check JVM startup and argument handling only.
+They do **not** verify file scanning, clipboard integration, tmux,
+or child-process execution. The backend remains experimental. The
+original `target/jvm-package/release/*.jar` artifacts are preserved
+and may require the runtime on the Java classpath to run.
 
 ## File selection and output
 
