@@ -11,3 +11,7 @@ serde_json = "1.0"
 [[bin]]
 name = "xcat"
 path = "src/bin/xcat.rs"
+
+[[bin]]
+name = "cptx"
+path = "src/bin/cptx.rs"

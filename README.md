@@ -1,6 +1,6 @@
 # console-tools
 
-Rust command-line utilities. **xcat** collects selected project files into a
+Rust command-line utilities. **cptx** copies the entire current tmux pane\n(including scrollback) to the desktop clipboard. **xcat** collects selected project files into a
 single clipboard text, optionally runs a task, and copies the combined source
 and task output back to the clipboard. It is based on
 [buildscripts/lua/bin/xcat.lua](https://github.com/witold-k/buildscripts/blob/master/lua/bin/xcat.lua).
@@ -8,15 +8,15 @@ and task output back to the clipboard. It is based on
 ## Build
 
 ```sh
-cargo build --release --bin xcat
-./target/release/xcat --help
+cargo build --release --bins
+./target/release/xcat --help\n./target/release/cptx --help
 ```
 
 For clipboard access on Linux, install **wl-clipboard** (`wl-copy`) for
 Wayland or **xclip** / **xsel** for X11. Windows uses PowerShell
 `Set-Clipboard`. A working desktop clipboard is required for scans.
 
-## Commands
+## Commands\n\n### cptx\n\nRun `cptx` from inside a tmux pane to copy its entire available scrollback\nand visible contents to the desktop clipboard. This is a Rust replacement\nfor [buildscripts/bash/cptx](https://github.com/witold-k/buildscripts/blob/master/bash/cptx).\nIt runs `tmux capture-pane -p -S -`, checks its exit status, and uses the\nsame clipboard implementation as `xcat` (X11 CLIPBOARD or Wayland).\n`cptx --help` displays usage. Running outside tmux reports an error.\nThe command does not print the captured pane or modify tmux history.\n\n### xcat\n
 
 | Command | Behavior |
 | --- | --- |
@@ -100,7 +100,7 @@ Tests live under `tests/` as integration tests:
 
 - `tests/config.rs`: filename filters, excluded directories, config creation,
   persistence, and invalid JSON.
-- `tests/cli.rs`: CLI help, unknown options, missing values, and forwarded
+- `tests/cptx.rs`: help and CLI argument validation without tmux or clipboard.\n- `tests/cli.rs`: CLI help, unknown options, missing values, and forwarded
   argument validation. These tests do not require a clipboard session.
 
 ```sh
