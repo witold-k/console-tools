@@ -1,1 +1,10 @@
-/target
+target
+build
+buildscripts
+debug/
+generated_src/
+.rustc_info.json
+.classpath
+.project
+.settings
+Cargo.lock
