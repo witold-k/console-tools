@@ -192,7 +192,7 @@ TASKS = {
 
 def main():
     if len(sys.argv) != 2 or sys.argv[1] not in TASKS:
-        print("Usage: python3 build.py <task>")
+        print("Usage: python3 scripts/build.py <task>")
         print("Available tasks:")
         for name in TASKS:
             print(f"  {name}")

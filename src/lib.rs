@@ -5,3 +5,7 @@ pub mod clipboard;
 pub mod config;
 pub mod scan;
 pub mod runner;
+pub mod task_report;
+
+pub mod xcat_options;
+pub mod tmux;

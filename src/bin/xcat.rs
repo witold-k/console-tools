@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-use console_tools::{clipboard, config::Config, runner, scan};
-use std::{env, error::Error, fs, path::{Path, PathBuf}, process::ExitCode};
+use console_tools::{clipboard, config::Config, runner, scan, task_report, xcat_options};
+use std::{env, error::Error, fs, path::Path, process::ExitCode};
 
 const HELP: &str = r#"xcat — filtered project files and optional task output to clipboard
 
@@ -36,68 +36,20 @@ Execution: Justfile => just --justfile, Makefile => make -f,
 Copies scan results first, then scan results plus task stdout and stderr.
 "#;
 
-#[derive(Debug, PartialEq, Eq)]
-struct Options {
-    dir: PathBuf,
-    execute: Option<PathBuf>,
-    standalone: bool,
-    config: Option<PathBuf>,
-    forwarded: Vec<String>,
-    help: bool,
-}
-
-fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> {
-    let mut opts = Options {
-        dir: PathBuf::from("."), execute: None, standalone: false, config: None,
-        forwarded: Vec::new(), help: false,
-    };
-    let mut args = args.into_iter();
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "-h" | "--help" => { opts.help = true; return Ok(opts); }
-            "-d" | "--dir" => opts.dir = PathBuf::from(args.next().ok_or("-d requires a directory")?),
-            "-e" | "--execute" => {
-                if opts.execute.is_some() { return Err("Only one of -e and -r may be supplied".into()); }
-                opts.execute = Some(PathBuf::from(args.next().ok_or("-e requires a file")?));
-            },
-            "-r" | "--run" => {
-                if opts.execute.is_some() { return Err("Only one of -e and -r may be supplied".into()); }
-                opts.execute = Some(PathBuf::from(args.next().ok_or("-r requires a file")?));
-                opts.standalone = true;
-            },
-            "-c" | "--config" => opts.config = Some(PathBuf::from(args.next().ok_or("-c requires a file")?)),
-            "--" => { opts.forwarded.extend(args); break; }
-            _ => return Err(format!("Unknown argument: {arg}. Run xcat --help.")),
-        }
-    }
-    if opts.execute.is_none() && !opts.forwarded.is_empty() {
-        return Err("-- arguments require -e".into());
-    }
-    Ok(opts)
-}
-
 fn run_task(file: &Path, args: &[String], root: &Path) -> Result<(String, bool), Box<dyn Error>> {
     let output = runner::command(file, args, root)?.output()?;
-    // Combined clipboard artifact contains both streams, separated to avoid ambiguity.
-    let mut content = format!("
-===== EXECUTABLE OUTPUT: {} =====
-", file.display());
-    content.push_str("===== STDOUT =====
-");
-    content.push_str(&String::from_utf8_lossy(&output.stdout));
-    if !content.ends_with('\n') { content.push('\n'); }
-    content.push_str("===== STDERR =====
-");
-    content.push_str(&String::from_utf8_lossy(&output.stderr));
-    if !content.ends_with('\n') { content.push('\n'); }
-    content.push_str(&format!("===== EXIT STATUS: {} =====
-", output.status.code().map_or_else(|| "terminated by signal".to_string(), |code| code.to_string())));
+    let status = output.status.code().map_or_else(|| "terminated by signal".to_string(), |code| code.to_string());
+    let content = task_report::format_task_output(file, &output.stdout, &output.stderr, &status);
     Ok((content, output.status.success()))
 }
 
 fn run() -> Result<bool, Box<dyn Error>> {
-    let opts = parse(env::args().skip(1))?;
+    let opts = xcat_options::parse(env::args().skip(1))?;
     if opts.help { print!("{HELP}"); return Ok(true); }
+    #[cfg(target_os = "wasi")]
+    if opts.execute.is_some() {
+        return Err("WASI cannot launch tasks: use wasm-host xcat ...".into());
+    }
     let root = opts.dir.canonicalize()?;
     if !root.is_dir() {
         return Err(format!("Not a directory: {}", root.display()).into());
@@ -143,7 +95,32 @@ fn run() -> Result<bool, Box<dyn Error>> {
     Ok(success)
 }
 
+// Formatting runs inside WASM too: the host only launches the task and passes
+// its captured streams through preopened temporary files.
+#[cfg(target_os = "wasi")]
+fn wasm_report(args: &[String]) -> Result<(), Box<dyn Error>> {
+    if args.len() != 5 {
+        return Err("usage: xcat --wasm-task-report <task> <stdout-file> <stderr-file> <status>".into());
+    }
+    let stdout = fs::read(&args[2])?;
+    let stderr = fs::read(&args[3])?;
+    print!("{}", task_report::format_task_output(
+        Path::new(&args[1]), &stdout, &stderr, &args[4]));
+    Ok(())
+}
+
 fn main() -> ExitCode {
+    #[cfg(target_os = "wasi")]
+    {
+        let args: Vec<String> = env::args().skip(1).collect();
+        if args.first().is_some_and(|a| a == "--wasm-task-report") {
+            return match wasm_report(&args) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(err) => { eprintln!("xcat: {err}"); ExitCode::FAILURE }
+            };
+        }
+    }
+
     match run() {
         Ok(true) => ExitCode::SUCCESS,
         Ok(false) => ExitCode::FAILURE,

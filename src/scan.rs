@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Stable, filtered source collection and formatting using fsscanner.
-
+//! Iterative dependency-free directory scanner, shared by native and WASI builds.
 use crate::config::Config;
-use fsscanner::{fsscanner_base::collect_files_all_filtered, pathfilter::Pathfilter};
 use std::{collections::HashSet, fs, io, path::{Path, PathBuf}};
 
 fn group(path: &Path) -> usize {
@@ -12,24 +10,38 @@ fn group(path: &Path) -> usize {
     else { 2 }
 }
 
-/// Reads only configured file types; returns formatted clipboard text.
+/// Collect files under the canonical root, respecting config, symlink boundaries,
+/// directory exclusions, and deterministic output ordering.
 pub fn collect(root: &Path, config: &Config) -> io::Result<(String, usize)> {
     let root = root.canonicalize()?;
     if !root.is_dir() { return Err(io::Error::other("scan root is not a directory")); }
-    let filter = Pathfilter::new(vec![root.clone()]);
-    let mut found = Vec::new();
-    collect_files_all_filtered(&root, &filter, &mut found);
-    let mut seen = HashSet::<PathBuf>::new();
-    let mut files = Vec::new();
-    for candidate in found {
-        let Ok(real) = candidate.canonicalize() else { continue; };
-        // Also enforces root containment for normal paths and symbolic links.
-        let Ok(relative) = real.strip_prefix(&root) else { continue; };
-        if !config.accepts(relative) || config.is_excluded(relative) || !seen.insert(real.clone()) {
+    let mut dirs = vec![root.clone()];
+    let mut visited_dirs = HashSet::<PathBuf>::new();
+    let mut visited_files = HashSet::<PathBuf>::new();
+    let mut files = Vec::<(PathBuf, PathBuf)>::new();
+
+    while let Some(dir) = dirs.pop() {
+        let Ok(real_dir) = dir.canonicalize() else { continue };
+        if !real_dir.starts_with(&root) || !visited_dirs.insert(real_dir.clone()) {
             continue;
         }
-        files.push((relative.to_path_buf(), real));
+        let Ok(entries) = fs::read_dir(&real_dir) else { continue };
+        for entry in entries.flatten() {
+            let candidate = entry.path();
+            let Ok(real) = candidate.canonicalize() else { continue };
+            if !real.starts_with(&root) { continue; }
+            let Ok(relative) = real.strip_prefix(&root) else { continue };
+            if config.is_excluded(relative) { continue; }
+            if real.is_dir() {
+                if !visited_dirs.contains(&real) { dirs.push(real); }
+            } else if real.is_file()
+                && config.accepts(relative)
+                && visited_files.insert(real.clone()) {
+                files.push((relative.to_path_buf(), real));
+            }
+        }
     }
+
     files.sort_by(|a, b| group(&a.0).cmp(&group(&b.0)).then_with(|| a.0.cmp(&b.0)));
     let mut output = String::new();
     let mut count = 0;
@@ -39,12 +51,12 @@ pub fn collect(root: &Path, config: &Config) -> io::Result<(String, usize)> {
             eprintln!("Skipping oversized file: {}", relative.display());
             continue;
         }
-        // Avoid binary or invalid UTF-8 clipboard data.
         let contents = match fs::read_to_string(&real) {
             Ok(text) if !text.contains('\0') => text,
             Ok(_) => { eprintln!("Skipping binary file: {}", relative.display()); continue; }
             Err(e) if e.kind() == io::ErrorKind::InvalidData => {
-                eprintln!("Skipping non-UTF-8 file: {}", relative.display()); continue;
+                eprintln!("Skipping non-UTF-8 file: {}", relative.display());
+                continue;
             }
             Err(e) => return Err(e),
         };

@@ -27,9 +27,8 @@ fn creates_missing_config_and_preserves_existing_changes() {
     let _ = fs::remove_file(&path);
     let initial = Config::load_or_create(&path).unwrap();
     assert!(initial.accepts(Path::new("hello.rs")));
-    let mut edited = initial;
-    edited.scanendfilter = vec![".special".to_string()];
-    fs::write(&path, serde_json::to_string(&edited).unwrap()).unwrap();
+    assert!(initial.accepts(Path::new("hello.rs")));
+    fs::write(&path, r#"{"scanendfilter":[".special"]}"#).unwrap();
     let loaded = Config::load_or_create(&path).unwrap();
     assert!(loaded.accepts(Path::new("hello.special")));
     assert!(!loaded.accepts(Path::new("hello.rs")));

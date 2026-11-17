@@ -1,0 +1,19 @@
+[package]
+name = "console-tools-wasmi-runner"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Independent experiment: keep the main std-only package dependency-free.
+[workspace]
+
+[dependencies]
+wasmi = { version = "2.0.0", default-features = false, features = ["std", "validate"] }
+wasmi_wasi = "2.0.0"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = "symbols"

@@ -2,8 +2,10 @@
 //! Copy one complete UTF-8 payload to the desktop clipboard.
 //! X11 clipboard owners may stay alive after their input has been written.
 
+#[cfg(not(target_os = "wasi"))]
 use std::{io::{self, Write}, process::{Command, Stdio}};
 
+#[cfg(not(target_os = "wasi"))]
 fn copy_with(program: &str, args: &[&str], text: &str) -> io::Result<()> {
     // Never pipe stderr from a clipboard owner: X11 tools may fork a daemon
     // which inherits that descriptor, keeping wait_with_output blocked.
@@ -31,6 +33,7 @@ fn copy_with(program: &str, args: &[&str], text: &str) -> io::Result<()> {
 }
 
 /// Copy the complete payload in one operation. Supports Wayland, X11, Windows.
+#[cfg(not(target_os = "wasi"))]
 pub fn copy(text: &str) -> io::Result<()> {
     #[cfg(windows)]
     {
@@ -63,4 +66,13 @@ pub fn copy(text: &str) -> io::Result<()> {
         }
         Err(io::Error::other(format!("Clipboard unavailable ({})", errors.join("; "))))
     }
+}
+
+ 
+/// WASI has no portable desktop clipboard. The std-only host bridge receives
+/// the complete payload from stdout and performs the actual clipboard operation.
+#[cfg(target_os = "wasi")]
+pub fn copy(text: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    std::io::stdout().write_all(text.as_bytes())
 }

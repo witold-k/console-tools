@@ -3,10 +3,15 @@ name = "console-tools"
 version = "0.1.0"
 edition = "2024"
 
+# The native binaries and wasm32-wasip1 build use only the Rust standard library.
 [dependencies]
-fsscanner = { version = "0.4.0", git = "https://github.com/witold-k/fsscanner", rev = "cb034d15865d20b5102c6ec5a12f8944e2e11058" }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = "z"
+strip = "debuginfo"
+panic = "abort"
 
 [[bin]]
 name = "xcat"
@@ -15,3 +20,7 @@ path = "src/bin/xcat.rs"
 [[bin]]
 name = "cptx"
 path = "src/bin/cptx.rs"
+
+[[bin]]
+name = "wasm-host"
+path = "src/bin/wasm_host.rs"

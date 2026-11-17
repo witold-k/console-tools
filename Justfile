@@ -1,143 +1,153 @@
-# user_name        := env("USER")
-# current_location := justfile()
-current_dir      := justfile_directory()
-module_name      := file_name(current_dir)
-target_dir       := `cargo metadata --no-deps --format-version=1 | jq -r '.target_directory'`
-
-# Default target: native debug build.
+# Default native debug build.
 default: build
 
-# Clear tmux scrollback (when available) and the terminal display.
+# Clear tmux and terminal.
 clear:
-    tmux clear-history || true
-    clear
+    python3 scripts/maintenance.py clear
 
-# Pull project updates using build.py (github_pull).
+# Pull current branch using build helper.
 pull:
-    python3 build.py github_pull
+    python3 scripts/build.py github_pull
 
-# Build native debug binaries through build.py.
+# Native debug build and tests.
 build:
-    python3 build.py build-debug
+    python3 scripts/build.py build-debug
 
-# Build native release binaries through build.py.
+# Native release build and tests.
 build-release:
-    python3 build.py build-release
+    python3 scripts/build.py build-release
 
-# Pull updates, then build native debug binaries.
+# Pull and native debug build.
 gbuild: pull build
 
-# Pull, build native release binaries, then install (modifies local installation).
+# Pull, native release build and install (JVM is an independent experimental target).
 rbuild: pull build-release install
 
-# Prepare the backend-local target/release directory needed by upstream tooling.
+# Prepare JVM backend directory.
 jvm-target-dir:
-    # Upstream build.py writes metadata to its local target/release even with a global Cargo target-dir.
-    mkdir -p "${XDG_DATA_HOME:-$HOME/.local/share}/cargo-jvm/rustc_codegen_jvm/target/release"
+    python3 scripts/jvm.py target-dir
 
-# Install cargo-jvm, set up the experimental JVM backend, and show diagnostics.
-jvm-setup: jvm-target-dir
-    cargo install cargo-jvm
-    CARGO_TARGET_DIR=target cargo jvm setup
-    CARGO_TARGET_DIR=target cargo jvm doctor
+# Install and initialize cargo-jvm.
+jvm-setup:
+    python3 scripts/jvm.py setup
 
-# Compile xcat and cptx for the JVM in debug mode.
-build-jvm: jvm-target-dir
-    CARGO_TARGET_DIR=target RUSTFLAGS="-C panic=abort" cargo jvm build --bin xcat
-    CARGO_TARGET_DIR=target RUSTFLAGS="-C panic=abort" cargo jvm build --bin cptx
+# Build release JVM JARs, optimize with ProGuard, smoke-test, and print final JAR sizes.
+build-jvm: jvm-test-proguard
+    python3 scripts/jvm.py report-optimized
 
-# Produce original release JARs under target/jvm-package/release/.
-jvm-package: jvm-target-dir
-    CARGO_TARGET_DIR=target RUSTFLAGS="-C panic=abort" cargo jvm package --release --bin xcat
-    CARGO_TARGET_DIR=target RUSTFLAGS="-C panic=abort" cargo jvm package --release --bin cptx
+# Package original JVM JARs.
+jvm-package:
+    python3 scripts/jvm.py package
 
-# Build both distributable layouts from the original cargo-jvm package artifacts.
-# Thin: application JAR + adjacent runtime JAR (Manifest Class-Path).
-# Standalone: application and runtime classes merged into one executable JAR.
-# Produce thin (JAR + runtime) and standalone (merged runtime) distributions for both binaries.
+# Build thin and standalone JARs.
 jvm-distributions: jvm-package
-    #!/usr/bin/env bash
-    set -euo pipefail
-    runtime="${XDG_DATA_HOME:-$HOME/.local/share}/cargo-jvm/rustc_codegen_jvm/runtime/build/libs/runtime-0.1.0.jar"
-    test -f "$runtime" || { echo "Missing JVM runtime: $runtime" >&2; exit 1; }
-    mkdir -p target/jvm-dist/thin target/jvm-dist/standalone
-    cp "$runtime" target/jvm-dist/thin/runtime-0.1.0.jar
-    for bin in xcat cptx; do
-        source_jar="target/jvm-package/release/$bin.jar"
-        test -f "$source_jar" || { echo "Missing JVM package: $source_jar" >&2; exit 1; }
-        cp "$source_jar" "target/jvm-dist/thin/$bin.jar"
-        manifest_tmp="$(mktemp)"
-        printf 'Class-Path: runtime-0.1.0.jar\n' > "$manifest_tmp"
-        jar ufm "target/jvm-dist/thin/$bin.jar" "$manifest_tmp"
-        rm -f "$manifest_tmp"
-        work="$(mktemp -d)"
-        (cd "$work" && jar xf "$runtime" && jar xf "$OLDPWD/$source_jar")
-        # Reuse the application manifest (including Main-Class); discard signatures
-        # invalidated by merging archives.
-        find "$work/META-INF" -maxdepth 1 -type f \( -name '*.SF' -o -name '*.RSA' -o -name '*.DSA' -o -name '*.EC' \) -delete
-        test -f "$work/META-INF/MANIFEST.MF" || { echo "Missing manifest in $source_jar" >&2; rm -rf "$work"; exit 1; }
-        jar cfm "target/jvm-dist/standalone/$bin.jar" "$work/META-INF/MANIFEST.MF" -C "$work" .
-        rm -rf "$work"
-    done
-    echo 'Thin JARs: target/jvm-dist/thin/ (keep runtime-0.1.0.jar beside them)'
-    echo 'Standalone JARs: target/jvm-dist/standalone/'
+    python3 scripts/jvm.py distributions
 
-# Rebuild both distribution layouts and smoke-test all four JARs using --help.
+# Smoke-test both JVM distribution layouts.
 jvm-test-distributions: jvm-distributions
-    java -jar target/jvm-dist/thin/xcat.jar --help
-    java -jar target/jvm-dist/thin/cptx.jar --help
-    java -jar target/jvm-dist/standalone/xcat.jar --help
-    java -jar target/jvm-dist/standalone/cptx.jar --help
+    python3 scripts/jvm.py test-distributions
 
-# Run xcat --help through cargo-jvm (experimental smoke test).
-jvm-smoke: jvm-target-dir
-    CARGO_TARGET_DIR=target RUSTFLAGS="-C panic=abort" cargo jvm run --bin xcat -- --help
+# Optimize standalone JARs with ProGuard.
+jvm-proguard: jvm-distributions
+    python3 scripts/jvm.py proguard
 
-# Install cargo-llvm-cov and the llvm-tools-preview component.
-cover-setup:
-    cargo install cargo-llvm-cov
-    rustup component add llvm-tools-preview
+# Compare ProGuard JAR behavior against standalone JARs.
+jvm-test-proguard: jvm-proguard
+    python3 scripts/jvm.py test-proguard
 
-# Generate HTML coverage for all workspace targets/features.
-cover:
-	cargo llvm-cov --all-features --workspace --html
+# Run xcat help through cargo-jvm.
+jvm-smoke:
+    python3 scripts/jvm.py smoke
 
-# Generate LCOV coverage at the Cargo target directory.
-cover-lcov:
-	cargo llvm-cov --all-features --workspace --lcov --output-path {{target_dir}}/coverage/lcov.info
-
-# Print coverage summary in the terminal.
-cover-text:
-	cargo llvm-cov --all-features --workspace
-
-# Build, lint and install the native release binaries via cargo install.
-install:
-	cargo build --release
-	cargo clippy --release
-	cargo install --path .
-
-# JVM backend is experimental: inspect the emitted classes and runtime before launch.
-# cargo-jvm must be installed and configured separately.
-# List original JVM package JARs and emitted .class files, if present.
+# List JVM build artifacts.
 jvm-artifacts:
-    if [ -d target/jvm-package ]; then find target/jvm-package -type f -name '*.jar' -print; else echo 'No packaged JVM JARs yet (run just jvm-package)'; fi
-    if [ -d target/jvm-unknown-jvm ]; then find target/jvm-unknown-jvm -type f -name '*.class' -print; else echo 'No JVM class directory yet'; fi
+    python3 scripts/jvm.py artifacts
 
-# Remove Cargo.lock and clean this package's Cargo artifacts.
+
+# WASI: a single std-only Rust codebase, no Cargo dependencies or JVM libraries.
+wasm-setup:
+    python3 scripts/wasm.py setup
+
+# Build native tests and xcat/cptx WASI modules offline.
+build-wasm:
+    python3 scripts/wasm.py build
+
+# Build a separate small Wasmi + WASI runner (requires crates.io on first build).
+build-wasmi:
+    cargo build --manifest-path experiments/wasmi-runner/Cargo.toml --release
+
+# Test with the embedded Wasmi runner instead of an installed Wasmtime CLI.
+test-wasmi: build-wasmi build-wasm
+    CONSOLE_TOOLS_WASM_RUNNER="{{justfile_directory()}}/experiments/wasmi-runner/target/release/console-tools-wasmi-runner" python3 scripts/wasm.py test
+
+# Run real WASI smoke tests for scanning, tmux stdin, and task reporting.
+test-wasm: build-wasm
+    python3 scripts/wasm.py test
+
+# Run WASM xcat/cptx through a stdlib-only OS clipboard/process bridge.
+wasm-xcat:
+    cargo run --offline --release --bin wasm-host -- xcat
+
+wasm-cptx:
+    cargo run --offline --release --bin wasm-host -- cptx
+
+# Install coverage tools.
+cover-setup:
+    python3 scripts/maintenance.py cover-setup
+
+# Generate HTML coverage.
+cover:
+    python3 scripts/maintenance.py cover
+
+# Generate LCOV coverage.
+cover-lcov:
+    python3 scripts/maintenance.py cover-lcov
+
+# Print coverage report.
+cover-text:
+    python3 scripts/maintenance.py cover-text
+
+# Install native binaries.
+install:
+    python3 scripts/maintenance.py install
+
+# Clean package artifacts and Cargo.lock.
 clean:
-	rm Cargo.lock
-	@cargo clean -p {{module_name}}
+    python3 scripts/maintenance.py clean
 
-# Clean all Cargo build artifacts for this workspace.
+# Clean all Cargo artifacts.
 clean-all:
-	@cargo clean
+    python3 scripts/maintenance.py clean-all
 
-# List Rust compilation targets available through rustup.
+# List rustup targets.
 targetlist:
-    rustup target list
+    python3 scripts/maintenance.py targetlist
 
-# Cross-compile for aarch64-unknown-linux-gnu (requires target/toolchain support).
+# Build for aarch64 Linux.
 rpi:
-    cargo build --target aarch64-unknown-linux-gnu
+    python3 scripts/maintenance.py rpi
 
+# Inspect installed wasm2jar CLI and WASI module before attempting JVM translation.
+wasm2jar-probe:
+    python3 scripts/wasm2jar_probe.py probe
 
+# Convert the existing cptx WASI module to JVM bytecode and measure the JAR.
+# This does not imply WASI host functions are linked or executable.
+wasm2jar-cptx: build-wasm
+    python3 scripts/wasm2jar_probe.py try-convert --tool cptx -- --output-class console/tools/Cptx --jar {out} {wasm}
+
+# Package wasm2jar cptx with a minimal Java WASI host and smoke-test it.
+# The translated Rust logic remains unchanged; no external Java dependencies.
+wasm2jar-test-cptx: wasm2jar-cptx
+    python3 scripts/wasm2jar_run.py
+
+# Convert xcat WASI to JVM bytecode with a small Java WASI filesystem host.
+wasm2jar-xcat: build-wasm
+    python3 scripts/wasm2jar_probe.py try-convert --tool xcat -- --output-class console/tools/Xcat --jar {out} {wasm}
+
+# Package xcat and test --help, filesystem scanning, config and clipboard.
+wasm2jar-test-xcat: wasm2jar-xcat
+    python3 scripts/wasm2jar_run.py --tool xcat
+
+# Run the available JVM translation smoke tests for both tools.
+wasm2jar-test-all: wasm2jar-test-cptx wasm2jar-test-xcat
