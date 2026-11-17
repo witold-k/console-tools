@@ -123,10 +123,6 @@ clean-all:
 targetlist:
     python3 scripts/maintenance.py targetlist
 
-# Build for aarch64 Linux.
-rpi:
-    python3 scripts/maintenance.py rpi
-
 # Inspect installed wasm2jar CLI and WASI module before attempting JVM translation.
 wasm2jar-probe:
     python3 scripts/wasm2jar_probe.py probe

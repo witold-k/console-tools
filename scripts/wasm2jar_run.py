@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Package wasm2jar cptx with the minimal Java WASI host and smoke-test it."""
+"""Package wasm2jar xcat/cptx with Java WASI hosts and test both paths."""
 import argparse
 import json
 import os
@@ -99,9 +99,9 @@ def main():
     target = Path(json.loads(metadata.stdout)["target_directory"])
     original = target / "wasm2jar-probe" / f"{tool}.jar"
     if not original.is_file():
-        raise SystemExit("Missing translated JAR: run just wasm2jar-cptx first")
+        raise SystemExit(f"Missing translated JAR: run just wasm2jar-{tool} first")
     out = target / "wasm2jar-probe" / f"{tool}-standalone.jar"
-    with tempfile.TemporaryDirectory(prefix="cptx-jvm-") as d:
+    with tempfile.TemporaryDirectory(prefix=f"{tool}-jvm-") as d:
         stage = Path(d)
         with zipfile.ZipFile(original) as archive:
             for item in archive.infolist():
@@ -156,6 +156,32 @@ def main():
             if not (folder / "config-home" / "xcat" / "config.json").is_file():
                 raise RuntimeError("xcat JVM did not create default configuration")
             print("PASS: xcat JVM filesystem scan, UTF-8, config and clipboard")
+            # Exercise custom directory/config, task execution and standalone mode.
+            project = folder / "project"
+            project.mkdir()
+            (project / "source.md").write_text("JVM_CUSTOM_PROJECT_äöü\n", encoding="utf-8")
+            task = project / "task.sh"
+            task.write_text('#!/bin/sh\nprintf "JVM_TASK_STDOUT:%s\\n" "$1"\nprintf "JVM_TASK_STDERR\\n" >&2\n')
+            custom_config = folder / "custom" / "settings.json"
+            for mode in ("-e", "-r"):
+                clipboard.unlink(missing_ok=True)
+                invocation = ["java", "-jar", str(out), "-d", str(project),
+                              "-c", str(custom_config), mode, "task.sh", "--", "passed"]
+                execution = subprocess.run(invocation, cwd=folder, env=env,
+                                           capture_output=True, text=True)
+                if execution.returncode:
+                    raise RuntimeError(f"xcat JVM {mode} exit {execution.returncode}\\n{execution.stderr}")
+                copied = clipboard.read_text(encoding="utf-8")
+                if "JVM_TASK_STDOUT:passed" not in copied or "JVM_TASK_STDERR" not in copied:
+                    raise RuntimeError(f"xcat JVM {mode} task output missing: {copied[:1000]!r}")
+                if "===== EXIT STATUS: 0 =====" not in copied:
+                    raise RuntimeError(f"xcat JVM {mode} task status missing")
+                if ("JVM_CUSTOM_PROJECT_äöü" in copied) != (mode == "-e"):
+                    raise RuntimeError(f"xcat JVM {mode} scan inclusion mismatch")
+            if not custom_config.is_file():
+                raise RuntimeError("xcat JVM custom configuration was not created")
+            print("PASS: xcat JVM -d/-c/-e/-r, task args and WASM report")
+
         return 0
     sample = "WASI stdin äöü\n".encode("utf-8")
     result = run(["java", "-jar", str(out)], input=sample, capture_output=True)

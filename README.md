@@ -156,14 +156,18 @@ For clipboard integration, install the corresponding OS utility.
 just wasm2jar-test-cptx   # translate, package and test cptx end-to-end
 just wasm2jar-test-xcat   # translate, package and test filesystem scan and clipboard
 just wasm2jar-test-all    # both paths, including native/WASI build checks
-java -jar target/wasm2jar-probe/cptx-standalone.jar --help
-java -jar target/wasm2jar-probe/xcat-standalone.jar --help
-java -jar target/wasm2jar-probe/xcat-standalone.jar  # scan current directory
+# Locate the Cargo workspace target directory (may be ../target).
+TARGET_DIR=$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')
+java -jar "$TARGET_DIR/wasm2jar-probe/cptx-standalone.jar" --help
+java -jar "$TARGET_DIR/wasm2jar-probe/xcat-standalone.jar" --help
+java -jar "$TARGET_DIR/wasm2jar-probe/xcat-standalone.jar"  # scan current directory
 ```
 
 Generated standalone artifacts are
-`target/wasm2jar-probe/cptx-standalone.jar` and
-`target/wasm2jar-probe/xcat-standalone.jar`. In the November 2026 test
+`<Cargo target directory>/wasm2jar-probe/cptx-standalone.jar` and
+`<Cargo target directory>/wasm2jar-probe/xcat-standalone.jar`.
+Use `cargo metadata --no-deps --format-version 1` to locate the target directory;
+in a parent Cargo workspace it is typically `../target`, not `./target`. In the November 2026 test
 run they were approximately **52.5 KB** and **104.3 KB**, respectively;
 actual sizes depend on the build. These are substantially smaller than
 the older `rustc_codegen_jvm` JARs.
@@ -173,13 +177,22 @@ tmux → Rust WASM → `wl-copy` desktop path with scrollback through
 336,000 bytes. `xcat --help` and a real JVM filesystem scan are also
 verified, including UTF-8 file content, automatic configuration creation,
 and clipboard output using a mocked `wl-copy`. A manual JVM scan of the
-repository also succeeded. The Java host provides the WASI filesystem
+repository also succeeded (33 files copied), including the Linux clipboard
+fallback when `wl-copy` is unavailable. The Java host provides the WASI filesystem
 bridge while Rust/WASM retains the scanning and filtering logic.
 
-**Limitations:** JVM `xcat -e` and `-r` task execution are not supported;
-WASI Preview 1 cannot launch processes. Absolute `-d` paths and arbitrary
-custom config paths have not been verified through the Java preopens.
-The JVM host currently supports Linux clipboard utilities; Windows parity
+**Task execution (new, pending local verification):** The JVM host now supports
+`xcatj -e <file> -- <args>` and `xcatj -r <file> -- <args>`. Java launches
+trusted local tasks, captures stdout/stderr and exit status, and invokes the
+Rust/WASM task-report formatter through a temporary WASI preopen. For `-e`,
+the first clipboard copy contains the scan, followed by the combined scan and
+report; `-r` copies only the report. Absolute `-d` paths and custom `-c`
+config paths are supported through host preopens. The automated JVM test now
+covers these cases, but results need confirmation on the target machine.
+
+**Limitations:** WASI Preview 1 cannot launch processes itself, so the Java
+host duplicates the native Rust task-launcher selection logic. The JVM host
+currently supports Linux `wl-copy`, `xclip` and `xsel` clipboard utilities; Windows parity
 and a broader filesystem/security audit remain outstanding.
 
 `scripts/wasm2jar_run.py` applies a narrow compatibility patch to
@@ -193,6 +206,38 @@ The Java host must read `Memory.bytes` afresh after WASM memory growth.
 The `wasm-host` Rust binary is **not required** for this JVM path.
 It remains an independent Wasmtime-based runner and a reference for
 the filesystem, task, tmux and clipboard behavior.
+
+## Convenient JVM commands (Bash / PowerShell)
+
+The repository includes sourceable shell functions in `shell/` for the
+standalone wasm2jar JARs. They resolve the Cargo workspace target directory
+using `cargo metadata`, so they work from any current directory.
+
+**Bash (Linux):** add the following to `~/.bashrc` (adjust checkout path):
+
+```sh
+source /path/to/console-tools/shell/console-tools.bash
+```
+
+**PowerShell:** add the following to `$PROFILE` (adjust checkout path):
+
+```powershell
+. 'C:\path\to\console-tools\shell\console-tools.ps1'
+```
+
+Both shells define `xcatj [args...]` and `cptxj [args...]`.
+The JVM `xcatj` command now forwards `-d`, `-c`, `-e`, `-r` and `--` task
+arguments to the Java host (task execution is pending local verification).
+`cptxj` automatically uses the JVM desktop mode; `cptxj --help`
+shows help without desktop capture. `xcatj` forwards all arguments.
+Set `CONSOLE_TOOLS_JAR_DIR` to the directory containing the two
+standalone JARs to bypass Cargo metadata (environment variable in Bash
+or `$env:CONSOLE_TOOLS_JAR_DIR` in PowerShell).
+
+The wrappers need Java and existing built JARs; they do not build them.
+On Linux the JVM hosts need the supported clipboard utilities and
+`cptxj` needs tmux. The PowerShell wrapper is provided for convenience,
+but the JVM desktop hosts are **not yet Windows-compatible**.
 
 ## Experimental embedded Wasmi runner
 
@@ -239,7 +284,7 @@ repository root with `just <recipe>`:
 | `scripts/jvm.py` | JVM setup, compilation, JAR distributions, ProGuard and smoke tests |
 | `scripts/wasm.py` | Offline WASI builds and smoke tests |
 | `scripts/wasm2jar_probe.py` | Translate WASI modules to JVM bytecode and inspect imports |
-| `scripts/wasm2jar_run.py` | Package standalone JVM JARs, apply compatibility patch and run smoke tests |
+| `scripts/wasm2jar_run.py` | Package standalone JVM JARs, apply compatibility patch and run JVM end-to-end tests |
 | `src/bin/wasm_host.rs` | Native std-only WASI process and clipboard bridge |
 | `scripts/maintenance.py` | Installation, coverage, cleanup and target utilities |
 
@@ -266,13 +311,12 @@ checkout; `install` changes the locally installed binaries. JVM builds use
 | `just clean` | Delete `Cargo.lock` and clean this Cargo package |
 | `just clean-all` | Run `cargo clean` for the workspace |
 | `just targetlist` | List available rustup targets |
-| `just rpi` | Cross-compile for `aarch64-unknown-linux-gnu` |
 | `just cover-setup` | Install `cargo-llvm-cov` and LLVM tools |
 | `just cover` | Produce HTML coverage |
 | `just cover-lcov` | Produce LCOV coverage |
 | `just cover-text` | Print terminal coverage |
 | `just wasm2jar-test-cptx` | Test translated cptx including desktop clipboard roundtrip |
-| `just wasm2jar-test-xcat` | Test translated xcat JVM help (filesystem bridge pending) |
+| `just wasm2jar-test-xcat` | Test translated xcat JVM help, filesystem scan, config and clipboard |
 | `just wasm2jar-test-all` | Run both wasm2jar test paths |
 | `just jvm-target-dir` | Prepare backend-local target directory |
 | `just jvm-setup` | Install/setup `cargo-jvm` and run doctor |

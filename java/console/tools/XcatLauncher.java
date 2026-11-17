@@ -18,24 +18,22 @@ public final class XcatLauncher {
     private final Map<Integer,Path> paths=new HashMap<>();
     private final Map<Integer,Long> offsets=new HashMap<>();
     private final ByteArrayOutputStream output=new ByteArrayOutputStream();
-    private int nextFd=5;
-    private final Path root=Paths.get("").toAbsolutePath().normalize();
-    private final Path cfg=Paths.get(System.getenv().getOrDefault("XDG_CONFIG_HOME",
-        Paths.get(System.getProperty("user.home"),".config").toString())).toAbsolutePath().normalize().resolve("xcat");
+    private int nextFd=6;
+    private final Path root;
+    private final Path cfg;
+    private final Path report;
     private final String[] argv;
     private final String[] environment;
 
-    private XcatLauncher(String[] args) {
-        paths.put(3,root);paths.put(4,cfg);
+    private XcatLauncher(String[] args, Path root, Path cfg, Path report) {
+        this.root=root; this.cfg=cfg; this.report=report;
+        paths.put(3,root); paths.put(4,cfg);
+        if(report!=null)paths.put(5,report);
         List<String> a=new ArrayList<>(Arrays.asList(args));
-        if(!a.contains("--help")&&!a.contains("-h")){
-            if(!a.contains("-d")&&!a.contains("--dir")){a.add("-d");a.add(".");}
-            if(!a.contains("-c")&&!a.contains("--config")){a.add("-c");a.add("/cfg/config.json");}
-        }
-        argv = new String[a.size()+1];argv[0]="xcat";
+        argv=new String[a.size()+1]; argv[0]="xcat";
         for(int i=0;i<a.size();i++)argv[i+1]=a.get(i);
-        environment = System.getenv().entrySet().stream()
-            .map(e -> e.getKey() + "=" + e.getValue()).toArray(String[]::new);
+        environment=System.getenv().entrySet().stream()
+            .map(e->e.getKey()+"="+e.getValue()).toArray(String[]::new);
     }
 
     private ByteBuffer mem() {
@@ -138,7 +136,6 @@ public final class XcatLauncher {
                     int take = (int) Math.min(length, chunk.length);
                     m.position((int) pos); m.get(chunk, 0, take);
                     if(fd==1)output.write(chunk,0,take);
-                    if(fd==1) { /* stdout was already captured above */ }
                     else if(stream!=null)stream.write(chunk,0,take);
                     else {try(RandomAccessFile f=new RandomAccessFile(paths.get(fd).toFile(),"rw")){long off=offsets.getOrDefault(fd,0L);f.seek(off);f.write(chunk,0,take);offsets.put(fd,off+take);}}
                     pos += take; length -= take; total += take;
@@ -184,7 +181,8 @@ public final class XcatLauncher {
         String name=new String(b,StandardCharsets.UTF_8);
         if(name.startsWith("/"))throw new AccessDeniedException(name);
         Path p=base.resolve(name).normalize();
-        Path allowed=fd==4||base.startsWith(cfg)?cfg:root;
+        Path allowed=report!=null&&(fd==5||base.startsWith(report))?report:
+            fd==4||base.startsWith(cfg)?cfg:root;
         if(!p.startsWith(allowed))throw new AccessDeniedException(name);
         Path cursor=allowed;
         for(Path part:allowed.relativize(p)){
@@ -200,14 +198,14 @@ public final class XcatLauncher {
         return IO;
     }
     public int fd_prestat_get(int fd,int ptr){
-        if(fd!=3&&fd!=4)return BADF;
+        if(fd!=3&&fd!=4&&(fd!=5||report==null))return BADF;
         try{ByteBuffer m=mem();check(m,unsigned(ptr),8);m.putInt(ptr,0);
-            m.putInt(ptr+4,fd==3?1:4);return 0;}
+            m.putInt(ptr+4,fd==3?1:fd==4?4:7);return 0;}
         catch(IndexOutOfBoundsException e){return FAULT;}
     }
     public int fd_prestat_dir_name(int fd,int ptr,int len){
-        if(fd!=3&&fd!=4)return BADF;
-        byte[] b=(fd==3?".":"/cfg").getBytes(StandardCharsets.UTF_8);
+        if(fd!=3&&fd!=4&&(fd!=5||report==null))return BADF;
+        byte[] b=(fd==3?".":fd==4?"/cfg":"/report").getBytes(StandardCharsets.UTF_8);
         if(len<b.length)return INVAL;
         try{ByteBuffer m=mem();check(m,unsigned(ptr),b.length);m.position(ptr);m.put(b);return 0;}
         catch(IndexOutOfBoundsException e){return FAULT;}
@@ -353,46 +351,6 @@ public final class XcatLauncher {
             return exit.status;
         }
     }
-    private static byte[] commandOutput(String... command) throws Exception {
-        Process process = new ProcessBuilder(command).start();
-        byte[] stdout = process.getInputStream().readAllBytes();
-        byte[] stderr = process.getErrorStream().readAllBytes();
-        int status = process.waitFor();
-        if (status != 0)
-            throw new IOException(command[0] + " exited " + status + ": "
-                + new String(stderr, StandardCharsets.UTF_8));
-        return stdout;
-    }
-
-    /** Desktop mode is reserved for the cptx stdin bridge. */
-    private static void desktop() throws Exception {
-        byte[] pane = commandOutput("tmux", "capture-pane", "-p", "-S", "-");
-        InputStream originalIn = System.in;
-        PrintStream originalOut = System.out;
-        ByteArrayOutputStream output = new ByteArrayOutputStream();
-        try {
-            System.setIn(new ByteArrayInputStream(pane));
-            System.setOut(new PrintStream(output, true, StandardCharsets.UTF_8));
-            int status = new XcatLauncher(new String[0]).execute();
-            if (status != 0) throw new IOException("Rust WASM xcat exited " + status);
-        } finally {
-            System.setIn(originalIn);
-            System.setOut(originalOut);
-        }
-        byte[] bytes = output.toByteArray();
-        String[] clipboard = System.getenv("WAYLAND_DISPLAY") != null
-            ? new String[] {"wl-copy", "--type", "text/plain;charset=utf-8"}
-            : new String[] {"xclip", "-selection", "clipboard"};
-        Process process = new ProcessBuilder(clipboard)
-            .redirectOutput(ProcessBuilder.Redirect.DISCARD)
-            .redirectError(ProcessBuilder.Redirect.DISCARD).start();
-        try (OutputStream sink = process.getOutputStream()) {
-            sink.write(bytes);
-        }
-        int status = process.waitFor();
-        if (status != 0) throw new IOException(clipboard[0] + " exited " + status);
-    }
-
     private static void copyToClipboard(byte[] bytes) throws IOException, InterruptedException {
         List<String[]> candidates = new ArrayList<>();
         if (System.getenv("WAYLAND_DISPLAY") != null)
@@ -425,23 +383,146 @@ public final class XcatLauncher {
         throw new IOException("Clipboard unavailable (" + String.join("; ", errors) + ")");
     }
 
+    private static final class Options {
+        Path root=Paths.get("").toAbsolutePath().normalize();
+        Path config;
+        Path task;
+        boolean standalone;
+        boolean help;
+        List<String> forwarded=new ArrayList<>();
+    }
+    private static Options parse(String[] args) throws IOException {
+        Options o=new Options();
+        for(int i=0;i<args.length;i++){
+            String a=args[i];
+            if(a.equals("-h")||a.equals("--help")){o.help=true;return o;}
+            if(a.equals("--")){o.forwarded.addAll(Arrays.asList(args).subList(i+1,args.length));break;}
+            if(a.equals("-d")||a.equals("--dir")||a.equals("-c")||a.equals("--config")
+                ||a.equals("-e")||a.equals("--execute")||a.equals("-r")||a.equals("--run")){
+                if(++i>=args.length)throw new IOException(a+" requires a value");
+                String value=args[i];
+                if(a.equals("-d")||a.equals("--dir"))o.root=Paths.get(value).toAbsolutePath().normalize();
+                else if(a.equals("-c")||a.equals("--config"))o.config=Paths.get(value).toAbsolutePath().normalize();
+                else {
+                    if(o.task!=null)throw new IOException("Only one of -e and -r may be supplied");
+                    o.task=Paths.get(value);
+                    o.standalone=a.equals("-r")||a.equals("--run");
+                }
+            }else throw new IOException("Unknown argument: "+a);
+        }
+        if(o.task==null&&!o.forwarded.isEmpty())throw new IOException("-- arguments require -e or -r");
+        o.root=o.root.toRealPath();
+        if(!Files.isDirectory(o.root))throw new IOException("Not a directory: "+o.root);
+        if(o.task!=null){
+            o.task=(o.task.isAbsolute()?o.task:o.root.resolve(o.task)).toRealPath();
+            if(!Files.isRegularFile(o.task))throw new IOException("Not a task file: "+o.task);
+        }
+        if(o.config==null){
+            Path base=Paths.get(System.getenv().getOrDefault("XDG_CONFIG_HOME",
+                Paths.get(System.getProperty("user.home"),".config").toString()));
+            o.config=base.resolve("xcat/config.json").toAbsolutePath().normalize();
+        }
+        return o;
+    }
+    private static byte[] runWasm(String[] args, Path root, Path cfg, Path report) throws Exception {
+        XcatLauncher host=new XcatLauncher(args,root,cfg,report);
+        int status=host.execute();
+        if(status!=0)throw new IOException("xcat WASM exited "+status);
+        return host.output.toByteArray();
+    }
+    private static int taskStatus(Process process) throws InterruptedException {
+        return process.waitFor();
+    }
+    private static List<String> command(Path file, List<String> args) throws IOException {
+        String name=file.getFileName().toString();
+        String lower=name.toLowerCase(Locale.ROOT);
+        String ext=lower.contains(".")?lower.substring(lower.lastIndexOf('.')):"";
+        List<String> cmd=new ArrayList<>();
+        if(lower.equals("justfile")){cmd.add("just");cmd.add("--justfile");cmd.add(file.toString());}
+        else if(name.equals("Makefile")||name.equals("makefile")||name.equals("GNUmakefile")){
+            cmd.add("make");cmd.add("-f");cmd.add(file.toString());
+        }else if(Files.isExecutable(file)){cmd.add(file.toString());}
+        else {
+            String interpreter;
+            switch(ext){
+                case ".sh":case ".bash":interpreter="bash";break;
+                case ".py":interpreter="python3";break;
+                case ".lua":interpreter="lua";break;
+                case ".rb":interpreter="ruby";break;
+                case ".pl":interpreter="perl";break;
+                case ".js":case ".mjs":interpreter="node";break;
+                case ".ps1":interpreter=System.getProperty("os.name").toLowerCase(Locale.ROOT).contains("win")
+                    ?"powershell.exe":"pwsh";break;
+                default:throw new IOException("Unknown file type: "+file);
+            }
+            cmd.add(interpreter);
+            if(ext.equals(".ps1")){cmd.add("-NoProfile");cmd.add("-File");}
+            cmd.add(file.toString());
+        }
+        cmd.addAll(args);
+        return cmd;
+    }
+    private static final class TaskResult {
+        final byte[] report;
+        final int status;
+        TaskResult(byte[] report,int status){this.report=report;this.status=status;}
+    }
+    private static TaskResult taskReport(Options o) throws Exception {
+        Path temp=Files.createTempDirectory("xcat-jvm-report-");
+        try {
+            Path stdout=temp.resolve("stdout"),stderr=temp.resolve("stderr");
+            Process process=new ProcessBuilder(command(o.task,o.forwarded))
+                .directory(o.root.toFile()).redirectOutput(stdout.toFile())
+                .redirectError(stderr.toFile()).start();
+            int status=taskStatus(process);
+            byte[] report=runWasm(new String[]{"--wasm-task-report",o.task.toString(),
+                "/report/stdout","/report/stderr",Integer.toString(status)},o.root,
+                o.config.getParent(),temp);
+            return new TaskResult(report,status);
+        }finally {
+            Files.deleteIfExists(temp.resolve("stdout"));
+            Files.deleteIfExists(temp.resolve("stderr"));
+            Files.deleteIfExists(temp);
+        }
+    }
     public static void main(String[] args) {
         try {
-            if (args.length == 1 && "--desktop".equals(args[0])) {
-                throw new UnsupportedOperationException("xcat JVM filesystem/clipboard bridge is not implemented");
+            Options o=parse(args);
+            if(o.help){
+                System.out.write(runWasm(new String[]{"--help"},o.root,o.root,null));
+                return;
             }
-            XcatLauncher host=new XcatLauncher(args);
-            int status=host.execute();
-            if(status!=0){System.err.println("xcat JVM: WASI exited "+status);System.exit(status);}
-            if(Arrays.asList(args).contains("--help")||Arrays.asList(args).contains("-h")){
-                System.out.write(host.output.toByteArray());
-                System.out.flush();
+            byte[] scan=new byte[0];
+            if(!o.standalone){
+                Files.createDirectories(o.config.getParent());
+                scan=runWasm(new String[]{"-d",".","-c","/cfg/"+o.config.getFileName()},
+                    o.root,o.config.getParent(),null);
+                copyToClipboard(scan);
+                System.err.println("Copied scanned files to clipboard.");
             }
-            if(host.output.size()>0&&!Arrays.asList(args).contains("--help")&&!Arrays.asList(args).contains("-h")){
-                copyToClipboard(host.output.toByteArray());
+            if(o.task!=null){
+                try {
+                    TaskResult task=taskReport(o);
+                    byte[] report=task.report;
+                    byte[] combined=new byte[scan.length+report.length];
+                    System.arraycopy(scan,0,combined,0,scan.length);
+                    System.arraycopy(report,0,combined,scan.length,report.length);
+                    copyToClipboard(combined);
+                    System.err.println("Copied task stdout/stderr to clipboard.");
+                    if(task.status!=0)System.exit(1);
+                }catch(Exception error){
+                    if(!o.standalone){
+                        byte[] msg=("\\n===== EXECUTION ERROR: "+o.task+" =====\\n"+error+"\\n")
+                            .getBytes(StandardCharsets.UTF_8);
+                        byte[] combined=Arrays.copyOf(scan,scan.length+msg.length);
+                        System.arraycopy(msg,0,combined,scan.length,msg.length);
+                        copyToClipboard(combined);
+                    }
+                    throw error;
+                }
             }
         } catch (Throwable error) {
-            System.err.println("xcat JVM host: " + error);
+            System.err.println("xcat JVM host: "+error);
             error.printStackTrace(System.err);
             System.exit(1);
         }

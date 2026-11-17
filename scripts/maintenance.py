@@ -13,7 +13,7 @@ def run(*args, check=True):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=("clear", "cover-setup", "cover", "cover-lcov", "cover-text", "install", "clean", "clean-all", "targetlist", "rpi"))
+    parser.add_argument("action", choices=("clear", "cover-setup", "cover", "cover-lcov", "cover-text", "install", "clean", "clean-all", "targetlist"))
     action = parser.parse_args().action
     if action == "clear":
         run("tmux", "clear-history", check=False)
@@ -39,8 +39,6 @@ def main():
         run("cargo", "clean")
     elif action == "targetlist":
         run("rustup", "target", "list")
-    elif action == "rpi":
-        run("cargo", "build", "--target", "aarch64-unknown-linux-gnu")
 
 
 if __name__ == "__main__":
