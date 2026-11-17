@@ -10,8 +10,11 @@ and task output back to the clipboard. It is based on
 
 ```sh
 cargo build --release --bins
-./target/release/xcat --help
-./target/release/cptx --help
+# For a standalone checkout, binaries are typically in ./target/release/.
+# For a parent Cargo workspace, use the workspace target directory instead.
+TARGET_DIR=$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')
+"$TARGET_DIR/release/xcat" --help
+"$TARGET_DIR/release/cptx" --help
 ```
 
 For clipboard access on Linux, install **wl-clipboard** (`wl-copy`) for
@@ -49,7 +52,7 @@ The command does not print the captured pane or modify tmux history.
 `-e` / `--execute` selects a task file, resolved relative to the scan
 directory unless absolute. `-c` / `--config` overrides the config location.
 Everything after `--` is passed unchanged to the task, without shell
-interpolation. Arguments after `--` require `-e`.
+interpolation. Arguments after `--` require `-e` or `-r`.
 
 ## Standalone execution (`-r`)
 
@@ -73,9 +76,9 @@ ProGuard, JVM or pip package is bundled.
 A WASI Preview 1 module **cannot launch child processes or access the host
 clipboard directly**. A small native `wasm-host` executable uses the **same Rust modules** as the
 native tools to capture tmux, launch tasks and write to wl-copy/xclip/xsel.
-There is no second implementation of argument parsing, task dispatch or
-clipboard handling. All configuration and scanning happen in WASM;
-task-output formatting is shared by native Rust and WASM.
+The native WASI host reuses Rust argument parsing and task dispatch.
+The Java WASI host has its own OS process-launch and clipboard bridge.
+Configuration, scanning and task-report formatting remain in shared Rust/WASM code.
 
 ```text
 One Rust codebase (no Cargo dependencies)
@@ -130,7 +133,9 @@ This is a **separate JVM path** from the older `rustc_codegen_jvm`
 experiment below. The original std-only Rust sources compile to
 `wasm32-wasip1`, then `wasm2jar` 0.1.0 translates the WASM modules into
 Java bytecode. A small Java WASI Preview 1 host supplies the imported
-functions. **No second implementation of the application logic is needed.**
+functions. The scanning, configuration and task-report logic is reused from Rust/WASM;
+OS integration (process launching, filesystem preopens and clipboard) is
+provided by Java.
 
 ```text
               Rust xcat / cptx
@@ -154,7 +159,7 @@ For clipboard integration, install the corresponding OS utility.
 
 ```sh
 just wasm2jar-test-cptx   # translate, package and test cptx end-to-end
-just wasm2jar-test-xcat   # translate, package and test filesystem scan and clipboard
+just wasm2jar-test-xcat   # scan, config, clipboard, -e/-r tasks and reports
 just wasm2jar-test-all    # both paths, including native/WASI build checks
 # Locate the Cargo workspace target directory (may be ../target).
 TARGET_DIR=$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')
@@ -167,8 +172,8 @@ Generated standalone artifacts are
 `<Cargo target directory>/wasm2jar-probe/cptx-standalone.jar` and
 `<Cargo target directory>/wasm2jar-probe/xcat-standalone.jar`.
 Use `cargo metadata --no-deps --format-version 1` to locate the target directory;
-in a parent Cargo workspace it is typically `../target`, not `./target`. In the November 2026 test
-run they were approximately **52.5 KB** and **104.3 KB**, respectively;
+in a parent Cargo workspace it is typically `../target`, not `./target`. In the verified 17 November 2026 test
+run they were **52,492 bytes** and **107,725 bytes**, respectively;
 actual sizes depend on the build. These are substantially smaller than
 the older `rustc_codegen_jvm` JARs.
 
@@ -180,15 +185,18 @@ and clipboard output using a mocked `wl-copy`. A manual JVM scan of the
 repository also succeeded (33 files copied), including the Linux clipboard
 fallback when `wl-copy` is unavailable. The Java host provides the WASI filesystem
 bridge while Rust/WASM retains the scanning and filtering logic.
+The 17 November 2026 `just wasm2jar-test-all` run also passed the
+`xcat` `-e`/`-r` end-to-end checks, custom directory/config paths,
+argument forwarding, stdout/stderr capture and WASM-generated task reports.
 
-**Task execution (new, pending local verification):** The JVM host now supports
+**Task execution (verified on Linux):** The JVM host supports
 `xcatj -e <file> -- <args>` and `xcatj -r <file> -- <args>`. Java launches
 trusted local tasks, captures stdout/stderr and exit status, and invokes the
 Rust/WASM task-report formatter through a temporary WASI preopen. For `-e`,
 the first clipboard copy contains the scan, followed by the combined scan and
 report; `-r` copies only the report. Absolute `-d` paths and custom `-c`
-config paths are supported through host preopens. The automated JVM test now
-covers these cases, but results need confirmation on the target machine.
+config paths are supported through host preopens. The automated JVM end-to-end test passed on Linux with custom paths,
+forwarded arguments, stdout/stderr and exit-status report formatting.
 
 **Limitations:** WASI Preview 1 cannot launch processes itself, so the Java
 host duplicates the native Rust task-launcher selection logic. The JVM host
@@ -226,8 +234,10 @@ source /path/to/console-tools/shell/console-tools.bash
 ```
 
 Both shells define `xcatj [args...]` and `cptxj [args...]`.
+For example: `xcatj -d .`, `xcatj -e ./test.sh -- --verbose`,
+`xcatj -r script.py -- --verbose`, and `cptxj`.
 The JVM `xcatj` command now forwards `-d`, `-c`, `-e`, `-r` and `--` task
-arguments to the Java host (task execution is pending local verification).
+arguments to the Java host (verified in the Linux end-to-end tests).
 `cptxj` automatically uses the JVM desktop mode; `cptxj --help`
 shows help without desktop capture. `xcatj` forwards all arguments.
 Set `CONSOLE_TOOLS_JAR_DIR` to the directory containing the two
@@ -316,7 +326,7 @@ checkout; `install` changes the locally installed binaries. JVM builds use
 | `just cover-lcov` | Produce LCOV coverage |
 | `just cover-text` | Print terminal coverage |
 | `just wasm2jar-test-cptx` | Test translated cptx including desktop clipboard roundtrip |
-| `just wasm2jar-test-xcat` | Test translated xcat JVM help, filesystem scan, config and clipboard |
+| `just wasm2jar-test-xcat` | Test translated xcat JVM help, scan, config, clipboard and `-e`/`-r` task execution |
 | `just wasm2jar-test-all` | Run both wasm2jar test paths |
 | `just jvm-target-dir` | Prepare backend-local target directory |
 | `just jvm-setup` | Install/setup `cargo-jvm` and run doctor |
@@ -390,15 +400,16 @@ that static analysis cannot detect. If ProGuard reports missing
 dependencies, investigate them rather than suppressing warnings blindly.
 A successful `--help` smoke test does not prove full functionality.
 
-The `--help` tests check JVM startup and argument handling only.
-They do **not** verify file scanning, clipboard integration, tmux,
-or child-process execution. The backend remains experimental. The
+These `--help`-only limitations apply to the **older** `rustc_codegen_jvm`
+backend. The separate `wasm2jar` backend above has passed end-to-end tests
+for filesystem scanning, clipboard integration, tmux capture and task execution
+on Linux. Windows host integration remains unverified. The
 original `target/jvm-package/release/*.jar` artifacts are preserved
 and may require the runtime on the Java classpath to run.
 
 ## File selection and output
 
-xcat uses [fsscanner](https://github.com/witold-k/fsscanner) to traverse
+xcat uses its own standard-library Rust scanner to traverse
 the directory tree. Its JSON configuration controls which filenames and
 suffixes are included and which directories are excluded. Matching is
 case-insensitive. Selected files are ordered with Markdown first, text/log
