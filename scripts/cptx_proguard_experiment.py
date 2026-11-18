@@ -52,7 +52,7 @@ def verify(baseline: Path, candidate: Path) -> None:
     print("PASS CLI, binary/UTF-8, 16 KiB boundaries and error parity", flush=True)
     test_standalone(candidate, "cptx")
     test_desktop_failures(candidate)
-    # Compile the reflective fault harness against the optimized classes.
+    # Run WASI fault and partial-write checks against optimized classes.
     with tempfile.TemporaryDirectory(prefix="cptx-proguard-fault-") as directory:
         stage = Path(directory)
         with zipfile.ZipFile(candidate) as archive:
@@ -69,6 +69,8 @@ def main() -> None:
     parser.add_argument("--baseline", type=Path, help="Override input JAR (for reproducibility)")
     parser.add_argument("--output-dir", type=Path, help="Override output directory")
     parser.add_argument("--aggressive-only", action="store_true")
+    parser.add_argument("--relaxed-keep", action="store_true",
+                        help="Allow shrinking and optimization of generated WASM classes")
     parser.add_argument("--promote-to", type=Path,
                         help="Copy verified aggressive candidate to this default JAR")
     parser.add_argument("--skip-verify", action="store_true",
@@ -96,7 +98,8 @@ def main() -> None:
         candidates = [item for item in candidates if item[0] == "aggressive"]
     results = []
     for name, flags in candidates:
-        output = target / f"cptx-proguard-{name}.jar"
+        suffix = "-relaxed-keep" if args.relaxed_keep else ""
+        output = target / f"cptx-proguard-{name}{suffix}.jar"
         output.unlink(missing_ok=True)
         rules = [
             f"-injars {baseline}",
@@ -126,9 +129,13 @@ def main() -> None:
             # wasm2jar resolves generated functions through MethodHandles and names.
             # Keep generated WASM ABI classes intact, while allowing ProGuard
             # to analyze the Java host and auxiliary runtime classes.
-            "-keep class console.tools.Cptx { *; }",
-            "-keep class console.tools.Cptx$* { *; }",
-            "-keep class org.wasm2jar.** { *; }",
+            # Preserve the exported WASM entrypoint used by the partial-write
+            # regression harness; the relaxed wildcard may otherwise remove it.
+            *(["-keep class console.tools.Cptx { public void _start(); }"]
+              if args.relaxed_keep else []),
+            f"-keep{',allowshrinking,allowoptimization' if args.relaxed_keep else ''} class console.tools.Cptx {{ *; }}",
+            f"-keep{',allowshrinking,allowoptimization' if args.relaxed_keep else ''} class console.tools.Cptx$* {{ *; }}",
+            f"-keep{',allowshrinking,allowoptimization' if args.relaxed_keep else ''} class org.wasm2jar.** {{ *; }}",
             *flags,
         ]
         with tempfile.TemporaryDirectory(prefix="cptx-proguard-") as directory:
@@ -165,7 +172,8 @@ def main() -> None:
     if any(status != "PASS" for _, status, _ in results):
         raise SystemExit("FAIL one or more ProGuard candidates")
     if args.promote_to:
-        candidate = target / "cptx-proguard-aggressive.jar"
+        suffix = "-relaxed-keep" if args.relaxed_keep else ""
+        candidate = target / f"cptx-proguard-aggressive{suffix}.jar"
         destination = args.promote_to
         destination.parent.mkdir(parents=True, exist_ok=True)
         if destination.resolve() == baseline.resolve():

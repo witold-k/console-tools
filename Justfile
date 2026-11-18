@@ -134,11 +134,11 @@ wasm2jar-probe:
 wasm2jar-cptx: build-wasm
     python3 scripts/wasm2jar_probe.py try-convert --tool cptx -- --output-class console/tools/Cptx --jar {out} {wasm}
 
-# Default cptx JVM: tested no_std WASI + aggressive ProGuard.
+# Default cptx JVM: tested no_std WASI + aggressive ProGuard relaxed keep.
 # Preserve the unoptimized baseline for parity checks and diagnostics.
 wasm2jar-test-cptx:
     python3 scripts/wasi_no_std_jvm_test.py no_std_cptx --output-jar "{{cargo_target_dir}}/wasm2jar-probe/cptx-standalone-unoptimized.jar"
-    python3 scripts/cptx_proguard_experiment.py --baseline "{{cargo_target_dir}}/wasm2jar-probe/cptx-standalone-unoptimized.jar" --aggressive-only --promote-to "{{cargo_target_dir}}/wasm2jar-probe/cptx-standalone.jar"
+    python3 scripts/cptx_proguard_experiment.py --baseline "{{cargo_target_dir}}/wasm2jar-probe/cptx-standalone-unoptimized.jar" --aggressive-only --relaxed-keep --promote-to "{{cargo_target_dir}}/wasm2jar-probe/cptx-standalone.jar"
 
 # Retain the original std-based cptx JVM implementation for comparisons.
 wasm2jar-test-cptx-std: wasm2jar-cptx
@@ -212,6 +212,11 @@ wasi-no-std-cptx-package:
 # Compare all ProGuard modes against the preserved unoptimized baseline.
 cptx-proguard-experiment: wasm2jar-test-cptx
     python3 scripts/cptx_proguard_experiment.py --baseline "{{cargo_target_dir}}/wasm2jar-probe/cptx-standalone-unoptimized.jar"
+
+# Compare shrink, optimize, and aggressive with the production relaxed keep rules.
+# Uses preserved baseline; never replaces the default optimized JAR.
+cptx-proguard-relaxed-keep: wasm2jar-test-cptx
+    python3 scripts/cptx_proguard_experiment.py --baseline "{{cargo_target_dir}}/wasm2jar-probe/cptx-standalone-unoptimized.jar" --relaxed-keep
 
 # Diagnostic only: compare independently built aggressive JAR hashes.
 # Nondeterministic class metadata is not a release gate.

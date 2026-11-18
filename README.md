@@ -173,8 +173,7 @@ Generated standalone artifacts are
 `<Cargo target directory>/wasm2jar-probe/cptx-standalone.jar` and
 `<Cargo target directory>/wasm2jar-probe/xcat-standalone.jar`.
 Use `cargo metadata --no-deps --format-version 1` to locate the target directory;
-in a parent Cargo workspace it is typically `../target`, not `./target`. The default no_std cptx JAR was **14,819 bytes** in the 18 November 2026
-local regression run; the earlier std-based cptx JAR was **52,492 bytes**.
+in a parent Cargo workspace it is typically `../target`, not `./target`. The default no_std cptx JVM build now uses **aggressive ProGuard with relaxed keep rules**. In the 18 November 2026 local regression runs, the verified optimized JAR was approximately **11.6 KB** (11,631–11,632 bytes), compared with approximately **12.7 KB** for the previous conservative-keep build and **14.1 KB** unoptimized. The earlier std-based cptx JAR was **52,492 bytes**.
 The recorded xcat JAR size was **107,725 bytes**. Actual sizes depend on the build. These are substantially smaller than
 the older `rustc_codegen_jvm` JARs.
 
@@ -217,6 +216,30 @@ It remains an independent Wasmtime-based runner and a reference for
 the filesystem, task, tmux and clipboard behavior.
 
 
+### cptx JVM ProGuard optimization
+
+`just wasm2jar-test-cptx` builds and tests the unoptimized no_std WASM-to-JVM
+JAR, then applies aggressive ProGuard optimization with **relaxed keep**
+rules. The optimized JAR is promoted to
+`<Cargo target directory>/wasm2jar-probe/cptx-standalone.jar` **only after**
+CLI, UTF-8, desktop clipboard, WASI error, and partial-write regression
+checks pass. The unoptimized
+`cptx-standalone-unoptimized.jar` is preserved for comparison.
+
+The keep rules preserve the JVM entry point, dynamically resolved WASI host
+methods, and the generated WASM `_start` entry point. Other generated
+WASM/runtime classes are eligible for shrinking and optimization.
+`wasm2jar` uses dynamic `MethodHandle` resolution, so removing all
+keep rules is not a supported build configuration. The experimental
+minimal-keep candidate ran ordinary CLI and desktop tests but failed the
+partial-write harness because ProGuard removed or renamed classes required
+to compile the test-only host; it was **not** adopted.
+
+For diagnostics, `just cptx-proguard-relaxed-keep` compares the shrink,
+optimize and aggressive modes without replacing the default JAR.
+`just cptx-proguard-experiment` retains the conservative keep-rule
+comparison. JAR byte counts may vary by a few bytes between builds.
+
 ### Size experiments and reproducibility
 
 The isolated size/bytecode probes are kept for future optimization. Their
@@ -225,7 +248,7 @@ semantic gaps are documented in
 [`scripts/NO_STD_CPTX_EQUIVALENCE.md`](scripts/NO_STD_CPTX_EQUIVALENCE.md).
 The abandoned upstream wasm2jar memory-store patch experiment and its
 candidate-only comparison driver were removed; general measurement tools
-remain available. The 16 KiB-buffer no_std cptx module is now the default **JVM** packaging
+remain available. The 16 KiB-buffer no_std cptx module with aggressive relaxed-keep ProGuard is now the default **JVM** packaging
 path. Its Java desktop host provides tmux capture and clipboard integration,
 and the 18 November 2026 local regression suite passed, including short
 WASI writes and injected I/O failures. The native Rust cptx remains unchanged.

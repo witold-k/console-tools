@@ -73,50 +73,37 @@ def test_desktop_failures(jar: Path) -> None:
 
 
 def test_wasi_io_errors(stage: Path) -> None:
-    """Inject Java stream failures without changing normal launcher behavior."""
+    """Inject Java stream failures through public main, without private reflection."""
     harness = stage / "CptxIoFaultHarness.java"
     harness.write_text(r"""
 import java.io.*;
-import java.lang.reflect.*;
+import console.tools.CptxLauncher;
 
 public final class CptxIoFaultHarness {
     public static void main(String[] args) throws Exception {
-        Class<?> type = Class.forName("console.tools.CptxLauncher");
-        Constructor<?> ctor = type.getDeclaredConstructor(String[].class);
-        ctor.setAccessible(true);
-        Method execute = type.getDeclaredMethod("execute");
-        execute.setAccessible(true);
-        InputStream oldIn = System.in;
-        PrintStream oldOut = System.out;
-        try {
-            if (args[0].equals("read")) {
-                System.setIn(new InputStream() {
-                    @Override public int read() throws IOException {
-                        throw new IOException("injected read failure");
-                    }
-                    @Override public int read(byte[] b, int off, int len) throws IOException {
-                        throw new IOException("injected read failure");
-                    }
-                });
-            } else {
-                System.setIn(new ByteArrayInputStream("hello".getBytes("UTF-8")));
-                System.setOut(new PrintStream(new OutputStream() {
-                    @Override public void write(int b) throws IOException {
-                        throw new IOException("injected write failure");
-                    }
-                    @Override public void write(byte[] b, int off, int len) throws IOException {
-                        throw new IOException("injected write failure");
-                    }
-                }));
-            }
-            Object host = ctor.newInstance((Object) new String[0]);
-            int status = (Integer) execute.invoke(host);
-            if (status == 0) throw new AssertionError("Expected nonzero WASI exit");
-            System.err.println("PASS injected WASI fd_" + args[0] + " error: exit=" + status);
-        } finally {
-            System.setIn(oldIn);
-            System.setOut(oldOut);
+        if (args[0].equals("read")) {
+            System.setIn(new InputStream() {
+                @Override public int read() throws IOException {
+                    throw new IOException("injected read failure");
+                }
+                @Override public int read(byte[] b, int off, int len) throws IOException {
+                    throw new IOException("injected read failure");
+                }
+            });
+        } else {
+            System.setIn(new ByteArrayInputStream("hello".getBytes("UTF-8")));
+            System.setOut(new PrintStream(new OutputStream() {
+                @Override public void write(int b) throws IOException {
+                    throw new IOException("injected write failure");
+                }
+                @Override public void write(byte[] b, int off, int len) throws IOException {
+                    throw new IOException("injected write failure");
+                }
+            }));
         }
+        System.err.println("INJECTED WASI fd_" + args[0] + " error");
+        CptxLauncher.main(new String[0]);
+        throw new AssertionError("Expected nonzero WASI exit");
     }
 }
 """, encoding="utf-8")
@@ -124,9 +111,10 @@ public final class CptxIoFaultHarness {
     for operation in ("read", "write"):
         result = subprocess.run(["java", "-cp", str(stage), "CptxIoFaultHarness", operation],
                                 cwd=ROOT, capture_output=True, timeout=60)
-        assert result.returncode == 0 and (
-            f"PASS injected WASI fd_{operation} error".encode() in result.stderr
-        ), (operation, result.returncode, result.stderr)
+        assert result.returncode != 0 and (
+            f"INJECTED WASI fd_{operation} error".encode() in result.stderr
+        ) and b"Expected nonzero WASI exit" not in result.stderr, (
+            operation, result.returncode, result.stderr)
         print(f"PASS injected WASI fd_{operation} error")
 
 
