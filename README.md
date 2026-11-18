@@ -525,3 +525,46 @@ checking, stack types and WASM traps. Run the full JVM end-to-end suite
 for both tools before accepting any candidate; record JAR size and
 bytecode counts against the baseline. No compiler fork or translator
 patch is included in this repository yet.
+
+### Default aggressive ProGuard optimization for the no_std cptx JVM JAR
+
+The default `just wasm2jar-test-cptx` recipe builds and regression-tests the
+16 KiB-buffer no_std WASI module and packages the unoptimized JVM JAR as
+`wasm2jar-probe/cptx-standalone-unoptimized.jar`. It then runs the aggressive
+ProGuard configuration, verifies CLI, UTF-8/binary boundaries, mocked desktop
+tmux/clipboard integration, WASI I/O errors and test-host partial writes, and
+atomically publishes the passing candidate as
+`wasm2jar-probe/cptx-standalone.jar`. If optimization or verification fails,
+the default JAR is not replaced. The native binaries and xcat are unaffected.
+
+To compare the shrink, optimize and aggressive modes against the preserved
+unoptimized reference, run:
+
+```sh
+just cptx-proguard-experiment
+```
+
+Each candidate is kept separately in the Cargo workspace target directory.
+Generated wasm2jar ABI classes remain conservatively kept because dynamic
+MethodHandle bindings are not fully visible to static analysis. The partial
+WASI write harness recompiles a test-only host against the optimized runtime;
+it does **not** exercise the ProGuard-optimized host bytecode with injected
+short writes.
+
+### Reproducibility diagnostics (non-blocking)
+
+```sh
+just cptx-jvm-reproducibility
+```
+
+This builds two independent unoptimized JVM JARs, applies and tests aggressive
+ProGuard to both, and compares SHA-256 hashes and classfile differences.
+The wasm2jar `InnerClasses` metadata can be emitted in different orders and
+ProGuard does not necessarily normalize that ordering. Hash differences are
+diagnostic, **not** a release or merge gate. The default build instead requires
+functional regression tests to pass.
+
+**Known semantic gap:** stdin streaming may write a valid prefix before later
+invalid UTF-8 is detected, whereas desktop clipboard capture validates the
+whole input before invoking the clipboard. This behavior predates ProGuard
+and remains a separate correctness consideration.

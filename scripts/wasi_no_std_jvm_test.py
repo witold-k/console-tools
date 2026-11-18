@@ -161,6 +161,35 @@ def test_partial_wasi_writes(stage: Path) -> None:
             print(f"PASS partial WASI fd_write {name}: {len(payload):,} bytes")
 
 
+
+def normalize_jar_archive(path: Path) -> None:
+    """Normalize ZIP metadata/order without altering any class or resource bytes.
+
+    If wasm2jar emits different class bytes, the reproducibility check must
+    still fail; this deliberately does not normalize Java bytecode.
+    """
+    normalized = path.with_suffix(".normalized.jar")
+    with zipfile.ZipFile(path, "r") as source, zipfile.ZipFile(
+        normalized, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9
+    ) as destination:
+        names = sorted(name for name in source.namelist() if not name.endswith("/"))
+        if len(names) != len(set(names)):
+            raise ValueError("Duplicate JAR entry names")
+        if "META-INF/MANIFEST.MF" in names:
+            names.remove("META-INF/MANIFEST.MF")
+            names.insert(0, "META-INF/MANIFEST.MF")
+        for name in names:
+            if name.startswith("/") or ".." in Path(name).parts:
+                raise ValueError(f"Unsafe JAR entry: {name}")
+            info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+            info.compress_type = zipfile.ZIP_DEFLATED
+            info.create_system = 3
+            info.external_attr = 0o100644 << 16
+            destination.writestr(info, source.read(name), compress_type=zipfile.ZIP_DEFLATED,
+                                 compresslevel=9)
+    normalized.replace(path)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("variant", nargs="?", choices=("no_std_stream", "no_std_cptx"),
@@ -241,6 +270,7 @@ def main() -> None:
              str(ROOT / "java/console/tools/CptxLauncher.java")])
         run(["jar", "--create", "--file", str(standalone),
              "--main-class", "console.tools.CptxLauncher", "-C", str(stage), "."])
+        normalize_jar_archive(standalone)
         print(f"no_std standalone JVM JAR: {standalone.stat().st_size:,} B")
         cases = {
             "empty": b"",

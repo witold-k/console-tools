@@ -134,10 +134,11 @@ wasm2jar-probe:
 wasm2jar-cptx: build-wasm
     python3 scripts/wasm2jar_probe.py try-convert --tool cptx -- --output-class console/tools/Cptx --jar {out} {wasm}
 
-# Default cptx JVM implementation: 16 KiB no_std WASI module + Java desktop host.
-# Builds and regression-tests target/wasm2jar-probe/cptx-standalone.jar.
+# Default cptx JVM: tested no_std WASI + aggressive ProGuard.
+# Preserve the unoptimized baseline for parity checks and diagnostics.
 wasm2jar-test-cptx:
-    python3 scripts/wasi_no_std_jvm_test.py no_std_cptx --output-jar "{{cargo_target_dir}}/wasm2jar-probe/cptx-standalone.jar"
+    python3 scripts/wasi_no_std_jvm_test.py no_std_cptx --output-jar "{{cargo_target_dir}}/wasm2jar-probe/cptx-standalone-unoptimized.jar"
+    python3 scripts/cptx_proguard_experiment.py --baseline "{{cargo_target_dir}}/wasm2jar-probe/cptx-standalone-unoptimized.jar" --aggressive-only --promote-to "{{cargo_target_dir}}/wasm2jar-probe/cptx-standalone.jar"
 
 # Retain the original std-based cptx JVM implementation for comparisons.
 wasm2jar-test-cptx-std: wasm2jar-cptx
@@ -207,3 +208,12 @@ wasi-no-std-cptx-compare:
 # The default cptx JVM recipe is now wasm2jar-test-cptx.
 wasi-no-std-cptx-package:
     python3 scripts/wasi_no_std_jvm_test.py no_std_cptx --output-jar "{{cargo_target_dir}}/wasm2jar-probe/cptx-no-std-standalone.jar"
+
+# Compare all ProGuard modes against the preserved unoptimized baseline.
+cptx-proguard-experiment: wasm2jar-test-cptx
+    python3 scripts/cptx_proguard_experiment.py --baseline "{{cargo_target_dir}}/wasm2jar-probe/cptx-standalone-unoptimized.jar"
+
+# Diagnostic only: compare independently built aggressive JAR hashes.
+# Nondeterministic class metadata is not a release gate.
+cptx-jvm-reproducibility:
+    python3 scripts/cptx_jvm_reproducibility.py
