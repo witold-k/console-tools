@@ -126,6 +126,8 @@ public final class CptxLauncher {
                 }
             }
             stream.flush();
+            // PrintStream suppresses IOException; expose failures as WASI IO.
+            if (stream instanceof PrintStream && ((PrintStream) stream).checkError()) return IO;
             m.putInt(nwritten, total);
             return SUCCESS;
         } catch (IOException ex) { return IO; }

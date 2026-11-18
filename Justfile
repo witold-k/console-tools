@@ -134,9 +134,13 @@ wasm2jar-probe:
 wasm2jar-cptx: build-wasm
     python3 scripts/wasm2jar_probe.py try-convert --tool cptx -- --output-class console/tools/Cptx --jar {out} {wasm}
 
-# Package wasm2jar cptx with a minimal Java WASI host and smoke-test it.
-# The translated Rust logic remains unchanged; no external Java dependencies.
-wasm2jar-test-cptx: wasm2jar-cptx
+# Default cptx JVM implementation: 16 KiB no_std WASI module + Java desktop host.
+# Builds and regression-tests target/wasm2jar-probe/cptx-standalone.jar.
+wasm2jar-test-cptx:
+    python3 scripts/wasi_no_std_jvm_test.py no_std_cptx --output-jar "{{cargo_target_dir}}/wasm2jar-probe/cptx-standalone.jar"
+
+# Retain the original std-based cptx JVM implementation for comparisons.
+wasm2jar-test-cptx-std: wasm2jar-cptx
     python3 scripts/wasm2jar_run.py
 
 # Convert xcat WASI to JVM bytecode with a small Java WASI filesystem host.
@@ -198,3 +202,8 @@ wasi-no-std-cptx-test-raw:
 # Compare native WASI behavior with JVM for the same unoptimized WASM.
 wasi-no-std-cptx-compare:
     python3 scripts/wasi_no_std_jvm_test.py no_std_cptx --raw-wasm --compare-native
+
+# Build and regression-test the no_std cptx JVM distribution at its legacy experiment path.
+# The default cptx JVM recipe is now wasm2jar-test-cptx.
+wasi-no-std-cptx-package:
+    python3 scripts/wasi_no_std_jvm_test.py no_std_cptx --output-jar "{{cargo_target_dir}}/wasm2jar-probe/cptx-no-std-standalone.jar"

@@ -1,21 +1,23 @@
 #!/usr/bin/env python3
 """Run the isolated no_std streaming WASI fixture through the real Java host.
 
-No production binaries or JARs are replaced. The generated fixture is not
-UTF-8 validating and is not equivalent to the full cptx application.
+No production binaries or JARs are replaced. The no_std_cptx variant validates
+UTF-8 incrementally but is not equivalent to the full cptx application.
 """
 from __future__ import annotations
 
 from pathlib import Path
+import os
 import shutil
 import subprocess
 import tempfile
+import argparse
 import sys
 import zipfile
 
 from cptx_size_floor import ROOT, TARGET
 from wasi_no_std_floor import NO_STD
-from wasm2jar_run import fix_wasm2jar_assertion_error
+from wasm2jar_run import fix_wasm2jar_assertion_error, test_standalone
 
 
 def run(argv: list[str], **kwargs) -> subprocess.CompletedProcess:
@@ -23,15 +25,159 @@ def run(argv: list[str], **kwargs) -> subprocess.CompletedProcess:
     return subprocess.run(argv, cwd=ROOT, check=True, **kwargs)
 
 
+def test_desktop_failures(jar: Path) -> None:
+    """Desktop errors must never launch the clipboard after failed capture/validation."""
+    with tempfile.TemporaryDirectory(prefix="no-std-desktop-errors-") as directory:
+        root = Path(directory)
+        bin_dir = root / "bin"
+        bin_dir.mkdir()
+        pane = root / "pane"
+        marker = root / "clipboard-invoked"
+        tmux = bin_dir / "tmux"
+        clipboard = bin_dir / "wl-copy"
+        clipboard.write_text('#!/bin/sh\ntouch "$MOCK_CLIPBOARD_MARKER"\nexit "${MOCK_CLIPBOARD_EXIT:-0}"\n')
+        clipboard.chmod(0o755)
+        env = dict(os.environ)
+        env.update(PATH=str(bin_dir) + os.pathsep + env.get("PATH", ""),
+                   WAYLAND_DISPLAY="mock", MOCK_TMUX_PANE=str(pane),
+                   MOCK_CLIPBOARD_MARKER=str(marker))
+        java_executable = shutil.which("java")
+        if java_executable is None:
+            raise RuntimeError("Java executable not found")
+        java_executable = str(Path(java_executable).resolve())
+        def invoke() -> subprocess.CompletedProcess:
+            marker.unlink(missing_ok=True)
+            return subprocess.run([java_executable, "-jar", str(jar), "--desktop"],
+                                  cwd=ROOT, env=env, capture_output=True, timeout=60)
+        tmux.write_text('#!/bin/sh\nexit 23\n')
+        tmux.chmod(0o755)
+        result = invoke()
+        assert result.returncode != 0 and not marker.exists(), ("tmux failure", result.stderr)
+        print("PASS desktop tmux failure: clipboard not invoked")
+        tmux.write_text('#!/bin/sh\nexec /bin/cat "$MOCK_TMUX_PANE"\n')
+        pane.write_bytes(b"a" * 8192 + bytes((0xff,)))
+        result = invoke()
+        assert result.returncode != 0 and not marker.exists(), ("invalid UTF-8", result.stderr)
+        print("PASS desktop late invalid UTF-8: clipboard not invoked")
+        pane.write_bytes("valid äöü\\n".encode("utf-8"))
+        env["MOCK_CLIPBOARD_EXIT"] = "19"
+        result = invoke()
+        assert result.returncode != 0 and marker.exists(), ("clipboard failure", result.stderr)
+        print("PASS desktop clipboard failure: nonzero exit")
+        clipboard.unlink()
+        env["PATH"] = str(bin_dir)
+        result = invoke()
+        assert result.returncode != 0 and not marker.exists(), ("missing clipboard", result.stderr)
+        assert b"wl-copy" in result.stderr, ("missing clipboard diagnostic", result.stderr)
+        print("PASS desktop missing clipboard executable: nonzero exit")
+
+
+def test_wasi_io_errors(stage: Path) -> None:
+    """Inject Java stream failures without changing normal launcher behavior."""
+    harness = stage / "CptxIoFaultHarness.java"
+    harness.write_text(r"""
+import java.io.*;
+import java.lang.reflect.*;
+
+public final class CptxIoFaultHarness {
+    public static void main(String[] args) throws Exception {
+        Class<?> type = Class.forName("console.tools.CptxLauncher");
+        Constructor<?> ctor = type.getDeclaredConstructor(String[].class);
+        ctor.setAccessible(true);
+        Method execute = type.getDeclaredMethod("execute");
+        execute.setAccessible(true);
+        InputStream oldIn = System.in;
+        PrintStream oldOut = System.out;
+        try {
+            if (args[0].equals("read")) {
+                System.setIn(new InputStream() {
+                    @Override public int read() throws IOException {
+                        throw new IOException("injected read failure");
+                    }
+                    @Override public int read(byte[] b, int off, int len) throws IOException {
+                        throw new IOException("injected read failure");
+                    }
+                });
+            } else {
+                System.setIn(new ByteArrayInputStream("hello".getBytes("UTF-8")));
+                System.setOut(new PrintStream(new OutputStream() {
+                    @Override public void write(int b) throws IOException {
+                        throw new IOException("injected write failure");
+                    }
+                    @Override public void write(byte[] b, int off, int len) throws IOException {
+                        throw new IOException("injected write failure");
+                    }
+                }));
+            }
+            Object host = ctor.newInstance((Object) new String[0]);
+            int status = (Integer) execute.invoke(host);
+            if (status == 0) throw new AssertionError("Expected nonzero WASI exit");
+            System.err.println("PASS injected WASI fd_" + args[0] + " error: exit=" + status);
+        } finally {
+            System.setIn(oldIn);
+            System.setOut(oldOut);
+        }
+    }
+}
+""", encoding="utf-8")
+    run(["javac", "-cp", str(stage), "-d", str(stage), str(harness)])
+    for operation in ("read", "write"):
+        result = subprocess.run(["java", "-cp", str(stage), "CptxIoFaultHarness", operation],
+                                cwd=ROOT, capture_output=True, timeout=60)
+        assert result.returncode == 0 and (
+            f"PASS injected WASI fd_{operation} error".encode() in result.stderr
+        ), (operation, result.returncode, result.stderr)
+        print(f"PASS injected WASI fd_{operation} error")
+
+
+def test_partial_wasi_writes(stage: Path) -> None:
+    """Force short successful fd_write results in a test-only Java host."""
+    original = (ROOT / "java/console/tools/CptxLauncher.java").read_text(encoding="utf-8")
+    method_start = original.index("    public int fd_write(")
+    method_end = original.index("    private static final class Exit", method_start)
+    method = original[method_start:method_end]
+    needle = "long length = unsigned(m.getInt((int) (base + i * 8L + 4)));"
+    assert method.count(needle) == 1, "fd_write host implementation changed"
+    patched = method.replace(needle, needle + "\n                length = Math.min(length, 7);")
+    with tempfile.TemporaryDirectory(prefix="no-std-partial-write-") as directory:
+        override = Path(directory)
+        source = override / "console/tools/CptxLauncher.java"
+        source.parent.mkdir(parents=True)
+        source.write_text(original[:method_start] + patched + original[method_end:],
+                          encoding="utf-8")
+        run(["javac", "-cp", str(stage), "-d", str(override), str(source)])
+        classpath = os.pathsep.join((str(override), str(stage)))
+        cases = {
+            "ascii": b"short writes must retry\n",
+            "utf8": ("äöü 😀 — " * 300).encode("utf-8"),
+            "large": ("boundary ä 😀\n" * 6000).encode("utf-8"),
+        }
+        for name, payload in cases.items():
+            result = subprocess.run(["java", "-cp", classpath,
+                                     "console.tools.CptxLauncher"],
+                                    cwd=ROOT, input=payload, capture_output=True, timeout=60)
+            assert result.returncode == 0 and result.stdout == payload, (
+                name, result.returncode, len(result.stdout), result.stderr[:500])
+            print(f"PASS partial WASI fd_write {name}: {len(payload):,} bytes")
+
+
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("variant", nargs="?", choices=("no_std_stream", "no_std_cptx"),
+                        default="no_std_stream")
+    parser.add_argument("--raw-wasm", action="store_true")
+    parser.add_argument("--compare-native", action="store_true")
+    parser.add_argument("--output-jar", type=Path,
+                        help="Optional persistent standalone JAR; production build unchanged")
+    args = parser.parse_args()
+    if args.output_jar and args.variant != "no_std_cptx":
+        parser.error("--output-jar requires no_std_cptx")
     for tool in ("rustc", "wasm-opt", "wasm2jar", "javac", "jar", "java"):
         if not shutil.which(tool):
             raise RuntimeError(f"Required executable not found: {tool}")
-    variant = sys.argv[1] if len(sys.argv) > 1 else "no_std_stream"
-    if variant not in ("no_std_stream", "no_std_cptx"):
-        raise SystemExit("Usage: wasi_no_std_jvm_test.py [no_std_stream|no_std_cptx]")
-    use_raw = "--raw-wasm" in sys.argv[2:]
-    compare_native = "--compare-native" in sys.argv[2:]
+    variant = args.variant
+    use_raw = args.raw_wasm
+    compare_native = args.compare_native
     with tempfile.TemporaryDirectory(prefix="no-std-jvm-e2e-") as directory:
         tmp = Path(directory)
         source = tmp / "stream.rs"
@@ -56,7 +202,7 @@ def main() -> None:
                 "valid_utf8": "Grüße 😀\n".encode("utf-8"),
                 "invalid_utf8": bytes((0xff, 0xfe)),
                 "incomplete_utf8": bytes((0xf0, 0x9f)),
-                "split_invalid": b"a" * 4095 + bytes((0xf0, 0xff)),
+                "split_invalid": b"a" * 16383 + bytes((0xf0, 0xff)),
             }
             assert native_cases["invalid_utf8"] == bytes((0xff, 0xfe))
             assert native_cases["incomplete_utf8"] == bytes((0xf0, 0x9f))
@@ -100,13 +246,13 @@ def main() -> None:
             "empty": b"",
             "ascii": b"hello\n",
             "utf8": "Grüße 😀\n".encode("utf-8"),
-            "buffer_boundary": b"a" * 4095 + b"XYZ" + b"b" * 4097,
+            "buffer_boundary": b"a" * 16383 + b"XYZ" + b"b" * 16385,
             "large": ("JVM UTF-8 äöü 😀\n" * 32768).encode("utf-8"),
             "invalid_utf8": b"\xff\xfe\x00\x80",
         }
         if variant == "no_std_cptx":
             cases.pop("invalid_utf8")
-            cases["split_utf8"] = b"a" * 4095 + "😀".encode("utf-8") + b"b" * 4100
+            cases["split_utf8"] = b"a" * 16383 + "😀".encode("utf-8") + b"b" * 16400
         for name, data in cases.items():
             result = subprocess.run(["java", "-jar", str(standalone)], cwd=ROOT,
                                     input=data, capture_output=True, timeout=60)
@@ -122,13 +268,21 @@ def main() -> None:
             for option in ("-h", "--help"):
                 result = run(["java", "-jar", str(standalone), option],
                              capture_output=True, timeout=60)
-                assert b"Usage: cptx" in result.stdout, option
+                expected_help = (
+                    "cptx — copy the current tmux pane and its scrollback to the clipboard\n\n"
+                    "Usage: cptx [-h|--help]\n\n"
+                    "Requires tmux and a supported clipboard backend "
+                    "(xclip, xsel, or wl-copy).\n"
+                ).encode("utf-8")
+                assert result.stdout == expected_help and result.stderr == b"", (
+                    option, result.stdout, result.stderr)
                 print(f"PASS CLI {option}")
             for option in ("--unknown", "--help", "-h"):
                 arguments = [option, "extra"] if option != "--unknown" else [option]
                 result = subprocess.run(["java", "-jar", str(standalone), *arguments],
                                         cwd=ROOT, capture_output=True, timeout=60)
-                assert result.returncode != 0 and b"Usage:" in result.stderr, arguments
+                assert result.returncode == 1 and result.stderr == b"cptx: Usage: cptx [-h|--help]\n", (
+                    arguments, result.returncode, result.stderr)
                 print(f"PASS rejected CLI {arguments}")
             invalid_cases = {"invalid_utf8": bytes((0xff, 0xfe)),
                                "large_invalid_binary": bytes(range(256)) * 2048,
@@ -152,20 +306,31 @@ def main() -> None:
             assert immediate.returncode != 0 and immediate.stdout == b"", (
                 immediate.returncode, immediate.stdout[:100])
             late = subprocess.run(["java", "-jar", str(standalone)],
-                                  cwd=ROOT, input=b"a" * 4096 + bytes((0xff,)),
+                                  cwd=ROOT, input=b"a" * 16384 + bytes((0xff,)),
                                   capture_output=True, timeout=60)
-            assert late.returncode != 0 and late.stdout == b"a" * 4096, (
+            assert late.returncode != 0 and late.stdout == b"a" * 16384, (
                 late.returncode, len(late.stdout), late.stderr[:200])
             print("PASS immediate invalid input: no stdout")
-            print("CONFIRMED semantic gap: late invalid input emitted 4096 bytes")
+            print("CONFIRMED semantic gap: late invalid input emitted 16384 bytes")
+            # Exercise the actual tmux -> WASM -> clipboard desktop path with
+            # the same mocks and payload sizes as the production JAR suite.
+            test_standalone(standalone, "cptx")
+            print("PASS no_std desktop integration (tmux -> WASM -> clipboard)")
+            test_desktop_failures(standalone)
+            test_wasi_io_errors(stage)
+            test_partial_wasi_writes(stage)
             print("NOTE: streaming may emit a valid prefix before later invalid UTF-8;")
             print("the original cptx validates the entire input before writing.")
         else:
             print("NOTE: invalid UTF-8 is intentionally passed through, unlike full cptx.")
-        print("NOTE: Java host's fd_write writes whole chunks; partial writes are")
-        print("handled by the fixture but not artificially injected by this test.")
-        print("NOTE: read/write error paths are not injected by this test.")
-        print("No production artifacts changed.")
+        if variant == "no_std_cptx":
+            print("PASS short fd_write responses verified with a test-only Java host.")
+        if args.output_jar:
+            output = args.output_jar.resolve()
+            output.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(standalone, output)
+            print(f"Packaged no_std JAR: {output} ({output.stat().st_size:,} B)")
+        print("Native binaries and xcat artifacts unchanged.")
 
 
 if __name__ == "__main__":

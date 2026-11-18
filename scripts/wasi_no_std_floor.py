@@ -101,12 +101,12 @@ pub extern "C" fn _start() {
         let arg = unsafe { core::slice::from_raw_parts(argv[1], size as usize) };
         let end = arg.iter().position(|&b| b == 0).unwrap_or(arg.len());
         if &arg[..end] == b"-h" || &arg[..end] == b"--help" {
-            write_all(1, b"cptx - copy the current tmux pane and its scrollback to the clipboard\n\nUsage: cptx [-h|--help]\n\nRequires tmux and a supported clipboard backend (xclip, xsel, or wl-copy).\n");
+            write_all(1, b"cptx \xe2\x80\x94 copy the current tmux pane and its scrollback to the clipboard\n\nUsage: cptx [-h|--help]\n\nRequires tmux and a supported clipboard backend (xclip, xsel, or wl-copy).\n");
             return;
         }
         write_all(2, b"cptx: Usage: cptx [-h|--help]\n"); fail();
     }
-    let mut buf = [0u8; 4096];
+    let mut buf = [0u8; 16384];
     let mut continuation = 0u8;
     let mut next_min = 0x80u8;
     let mut next_max = 0xbfu8;

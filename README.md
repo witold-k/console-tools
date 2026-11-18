@@ -158,7 +158,8 @@ when available. The resulting standalone JARs require Java, not Wasmtime.
 For clipboard integration, install the corresponding OS utility.
 
 ```sh
-just wasm2jar-test-cptx   # translate, package and test cptx end-to-end
+just wasm2jar-test-cptx   # default: 16 KiB no_std cptx JVM, full regression suite
+just wasm2jar-test-cptx-std  # legacy std-based JVM comparison
 just wasm2jar-test-xcat   # scan, config, clipboard, -e/-r tasks and reports
 just wasm2jar-test-all    # both paths, including native/WASI build checks
 # Locate the Cargo workspace target directory (may be ../target).
@@ -172,9 +173,9 @@ Generated standalone artifacts are
 `<Cargo target directory>/wasm2jar-probe/cptx-standalone.jar` and
 `<Cargo target directory>/wasm2jar-probe/xcat-standalone.jar`.
 Use `cargo metadata --no-deps --format-version 1` to locate the target directory;
-in a parent Cargo workspace it is typically `../target`, not `./target`. In the verified 17 November 2026 test
-run they were **52,492 bytes** and **107,725 bytes**, respectively;
-actual sizes depend on the build. These are substantially smaller than
+in a parent Cargo workspace it is typically `../target`, not `./target`. The default no_std cptx JAR was **14,819 bytes** in the 18 November 2026
+local regression run; the earlier std-based cptx JAR was **52,492 bytes**.
+The recorded xcat JAR size was **107,725 bytes**. Actual sizes depend on the build. These are substantially smaller than
 the older `rustc_codegen_jvm` JARs.
 
 **Verified:** `cptx --help`, stdin/UTF-8 roundtrip, and a mocked
@@ -224,8 +225,12 @@ semantic gaps are documented in
 [`scripts/NO_STD_CPTX_EQUIVALENCE.md`](scripts/NO_STD_CPTX_EQUIVALENCE.md).
 The abandoned upstream wasm2jar memory-store patch experiment and its
 candidate-only comparison driver were removed; general measurement tools
-remain available. In particular, the approximately 14.75 KB no_std fixture
-JAR is **not** a complete tmux-to-clipboard `cptx` replacement.
+remain available. The 16 KiB-buffer no_std cptx module is now the default **JVM** packaging
+path. Its Java desktop host provides tmux capture and clipboard integration,
+and the 18 November 2026 local regression suite passed, including short
+WASI writes and injected I/O failures. The native Rust cptx remains unchanged.
+Standalone stdin/stdout streaming still emits a validated prefix before a
+later UTF-8 error; the desktop host buffers before writing to the clipboard.
 
 ## Convenient JVM commands (Bash / PowerShell)
 
