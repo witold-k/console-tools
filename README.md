@@ -215,6 +215,18 @@ The `wasm-host` Rust binary is **not required** for this JVM path.
 It remains an independent Wasmtime-based runner and a reference for
 the filesystem, task, tmux and clipboard behavior.
 
+
+### Size experiments and reproducibility
+
+The isolated size/bytecode probes are kept for future optimization. Their
+purpose, retained `just` commands, historical measurements, and known
+semantic gaps are documented in
+[`scripts/NO_STD_CPTX_EQUIVALENCE.md`](scripts/NO_STD_CPTX_EQUIVALENCE.md).
+The abandoned upstream wasm2jar memory-store patch experiment and its
+candidate-only comparison driver were removed; general measurement tools
+remain available. In particular, the approximately 14.75 KB no_std fixture
+JAR is **not** a complete tmux-to-clipboard `cptx` replacement.
+
 ## Convenient JVM commands (Bash / PowerShell)
 
 The repository includes sourceable shell functions in `shell/` for the
@@ -483,3 +495,28 @@ cargo build --release --bin xcat
 
 Manual end-to-end verification of scanning and clipboard behavior requires a
 working clipboard backend and, for `-e`, the relevant task runner.
+
+
+### wasm2jar bytecode size investigation
+
+The upstream compiler is [harpocrates/wasm2jar](https://github.com/harpocrates/wasm2jar),
+whose `lib/Cargo.toml` declares version 0.1.0. Its
+`lib/src/translate/memory.rs` translates WASM loads/stores through
+`java.nio.ByteBuffer`, explicitly emitting `Swap` around memory access and
+`Pop` after `ByteBuffer.put` (which returns the buffer). The latter is
+necessary for JVM stack balance and must not simply be deleted.
+
+The large `Part0` classes are dominated by translated WASM methods, not
+the Java launcher. Investigate memory-access translation before changing
+the Rust program. `just wasm-memory-patterns` counts selected sequences
+in the generated standalone JARs, and `just wasm-bytecode-report` reports
+instruction frequencies and large methods. Both are read-only. They do
+not establish whether a given instruction is redundant.
+
+Next compiler-side experiment, **not yet implemented**: compare a
+verified alternative memory-access emission strategy against upstream
+`wasm2jar` 0.1.0. Preserve ByteBuffer little-endian behavior, bounds
+checking, stack types and WASM traps. Run the full JVM end-to-end suite
+for both tools before accepting any candidate; record JAR size and
+bytecode counts against the baseline. No compiler fork or translator
+patch is included in this repository yet.

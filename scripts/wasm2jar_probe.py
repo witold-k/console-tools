@@ -61,7 +61,9 @@ def main():
     if extra and extra[0] == "--":
         extra = extra[1:]
 
-    compiler = locate("wasm2jar")
+    compiler = os.environ.get("WASM2JAR") or locate("wasm2jar")
+    if os.environ.get("WASM2JAR"):
+        print(f"wasm2jar override: {compiler}")
     locate("wast2jar")
     locate("java")
     locate("javap")

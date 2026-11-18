@@ -93,14 +93,34 @@ def fix_wasm2jar_assertion_error(stage, tool):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--tool", choices=("cptx", "xcat"), default="cptx")
-    tool = parser.parse_args().tool
+    parser.add_argument("--jar", type=Path, help="Test an existing JAR instead of packaging a new one")
+    parser.add_argument("--input-jar", type=Path, help="Translated JAR to package (isolated experiment)")
+    parser.add_argument("--output-jar", type=Path, help="Standalone JAR output (isolated experiment)")
+    args = parser.parse_args()
+    tool = args.tool
     metadata = subprocess.run(["cargo", "metadata", "--no-deps", "--format-version", "1"],
                               cwd=ROOT, check=True, capture_output=True, text=True)
     target = Path(json.loads(metadata.stdout)["target_directory"])
-    original = target / "wasm2jar-probe" / f"{tool}.jar"
-    if not original.is_file():
+    original = args.input_jar.resolve() if args.input_jar else target / "wasm2jar-probe" / f"{tool}.jar"
+    if not args.jar and not original.is_file():
         raise SystemExit(f"Missing translated JAR: run just wasm2jar-{tool} first")
-    out = target / "wasm2jar-probe" / f"{tool}-standalone.jar"
+    out = args.output_jar.resolve() if args.output_jar else target / "wasm2jar-probe" / f"{tool}-standalone.jar"
+    if args.jar and (args.input_jar or args.output_jar):
+        parser.error("--jar cannot be combined with --input-jar or --output-jar")
+    if args.jar:
+        out = args.jar
+        if not out.is_absolute() and out.parts and out.parts[0] == "target":
+            out = target.joinpath(*out.parts[1:])
+        else:
+            out = out.resolve()
+        if not out.is_file():
+            raise FileNotFoundError(out)
+    else:
+        package_standalone(original, out, tool)
+    return test_standalone(out, tool)
+
+
+def package_standalone(original, out, tool):
     with tempfile.TemporaryDirectory(prefix=f"{tool}-jvm-") as d:
         stage = Path(d)
         with zipfile.ZipFile(original) as archive:
@@ -119,6 +139,9 @@ def main():
              str(ROOT / f"java/console/tools/{tool.capitalize()}Launcher.java")])
         run(["jar", "--create", "--file", str(out), "--main-class",
              f"console.tools.{tool.capitalize()}Launcher", "-C", str(stage), "."])
+
+
+def test_standalone(out, tool):
     print(f"Standalone JAR: {out} ({out.stat().st_size} bytes)")
     result = subprocess.run(["java", "-jar", str(out), "--help"],
                             cwd=ROOT, capture_output=True, text=True)

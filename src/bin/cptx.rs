@@ -7,10 +7,10 @@ const HELP: &str = "cptx — copy the current tmux pane and its scrollback to th
 
 
 fn run() -> Result<(), Box<dyn Error>> {
-    let mut args = env::args().skip(1);
+    let mut args = env::args_os().skip(1);
     match (args.next().as_deref(), args.next()) {
         (None, None) => {}
-        (Some("-h" | "--help"), None) => { print!("{HELP}"); return Ok(()); }
+        (Some(arg), None) if arg == "-h" || arg == "--help" => { print!("{HELP}"); return Ok(()); }
         _ => return Err("Usage: cptx [-h|--help]".into()),
     }
     let text = tmux::capture()?;
