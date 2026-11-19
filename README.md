@@ -456,9 +456,12 @@ case-insensitive. Selected files are ordered with Markdown first, text/log
 files next, and other accepted files afterward. The copied text includes file
 boundaries and file contents.
 
-Targets outside the canonical scan root are rejected, and duplicate canonical
-paths are included once. Non-UTF-8, binary, and oversized files are skipped.
-Directory exclusions apply at any nesting level.
+File symlinks are followed even when their targets lie outside the scan root,
+using the symlink's relative path for filtering and output. Directory symlinks
+are traversed only when their targets stay within the canonical scan root.
+Duplicate canonical file targets are included once. Broken symlinks, non-UTF-8,
+binary, and oversized files are skipped. Directory exclusions apply at any
+nesting level.
 
 ## Configuration
 

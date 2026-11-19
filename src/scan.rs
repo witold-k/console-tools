@@ -10,8 +10,9 @@ fn group(path: &Path) -> usize {
     else { 2 }
 }
 
-/// Collect files under the canonical root, respecting config, symlink boundaries,
+/// Collect files under the canonical root, respecting config, directory boundaries,
 /// directory exclusions, and deterministic output ordering.
+/// File symlinks can point outside the root; directory symlinks cannot.
 pub fn collect(root: &Path, config: &Config) -> io::Result<(String, usize)> {
     let root = root.canonicalize()?;
     if !root.is_dir() { return Err(io::Error::other("scan root is not a directory")); }
@@ -28,12 +29,16 @@ pub fn collect(root: &Path, config: &Config) -> io::Result<(String, usize)> {
         let Ok(entries) = fs::read_dir(&real_dir) else { continue };
         for entry in entries.flatten() {
             let candidate = entry.path();
-            let Ok(real) = candidate.canonicalize() else { continue };
-            if !real.starts_with(&root) { continue; }
-            let Ok(relative) = real.strip_prefix(&root) else { continue };
+            // Retain the path used to reach the entry for filtering and output.
+            // A file symlink may legitimately point outside the scan root.
+            let Ok(relative) = candidate.strip_prefix(&root) else { continue };
             if config.is_excluded(relative) { continue; }
+            let Ok(real) = candidate.canonicalize() else { continue };
             if real.is_dir() {
-                if !visited_dirs.contains(&real) { dirs.push(real); }
+                // Do not follow a directory symlink outside the scan root.
+                if real.starts_with(&root) && !visited_dirs.contains(&real) {
+                    dirs.push(real);
+                }
             } else if real.is_file()
                 && config.accepts(relative)
                 && visited_files.insert(real.clone()) {
