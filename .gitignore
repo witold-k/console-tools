@@ -3,6 +3,7 @@ build
 buildscripts
 debug/
 generated_src/
+__pycache__
 .rustc_info.json
 .classpath
 .project
