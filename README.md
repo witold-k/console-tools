@@ -319,7 +319,7 @@ just jvm-artifacts   # list resulting artifacts
 
 JVM compilation and the application help screens have been observed to work
 with the backend runtime on the classpath. Full application functionality,
-especially process execution, remains unverified and may fail. Native `just rbuild` remains the supported release path.
+especially process execution, remains unverified and may fail. `just rbuild` builds and installs native release binaries and also runs both WASI-to-JVM translation test paths.
 See https://github.com/IntegralPilot/rustc_codegen_jvm for backend status.
 
 ## Build helper scripts
@@ -355,7 +355,8 @@ checkout; `install` changes the locally installed binaries. JVM builds use
 | `just build-release` | Native release build via `scripts/build.py` |
 | `just pull` | Pull project changes via `scripts/build.py github_pull` |
 | `just gbuild` | Pull and run a native debug build |
-| `just rbuild` | Pull, build native release binaries, and install |
+| `just install-wasm-tools` | Install missing Binaryen, JDK, wasm32-wasip1 Rust target and wasm2jar 0.1.0 (Debian/Ubuntu) |
+| `just rbuild` | Pull, build/install native release binaries, build xcat/cptx WASI modules, and build/test both wasm2jar JVM targets |
 | `just install` | Build release, run Clippy, and `cargo install --path .` |
 | `just clear` | Clear tmux history (if available) and terminal screen |
 | `just clean` | Delete `Cargo.lock` and clean this Cargo package |
@@ -418,7 +419,7 @@ just jvm-test-distributions
 
 ### Optional ProGuard size optimization
 
-`just build-jvm` is the experimental JVM pipeline: it packages both programs, creates thin and standalone distributions, shrinks standalone JARs with ProGuard, compares basic CLI behavior with the original JARs, and prints final paths and sizes. `just rbuild` remains native-only. ProGuard is provisioned automatically when necessary. For compilation only, use `python3 scripts/jvm.py build`.
+`just build-jvm` is the experimental JVM pipeline: it packages both programs, creates thin and standalone distributions, shrinks standalone JARs with ProGuard, compares basic CLI behavior with the original JARs, and prints final paths and sizes. `just rbuild` also invokes `wasm2jar-test-all` (including the WASI builds and JVM translation tests); the separate `build-jvm` command uses the older `rustc_codegen_jvm` backend. ProGuard is provisioned automatically when necessary. For compilation only, use `python3 scripts/jvm.py build`.
 
 
 `just build-jvm` automatically downloads and caches pinned **ProGuard 7.10.0** under `target/tools/` when the system ProGuard is missing or older than 7.8 (required for Java 25). No system-wide installation is needed. Set `PROGUARD=/path/to/proguard` to override the executable. A full JDK with `jmods` and network access on first download are required. ProGuard reads the standalone JARs and uses the JDK modules as library inputs:

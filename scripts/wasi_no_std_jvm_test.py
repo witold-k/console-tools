@@ -41,6 +41,9 @@ def test_desktop_failures(jar: Path) -> None:
         env.update(PATH=str(bin_dir) + os.pathsep + env.get("PATH", ""),
                    WAYLAND_DISPLAY="mock", MOCK_TMUX_PANE=str(pane),
                    MOCK_CLIPBOARD_MARKER=str(marker))
+        # Keep the clipboard-failure test independent of a real X11 clipboard.
+        # With DISPLAY set, the launcher correctly falls back to xclip/xsel.
+        env.pop("DISPLAY", None)
         java_executable = shutil.which("java")
         if java_executable is None:
             raise RuntimeError("Java executable not found")

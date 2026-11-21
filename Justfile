@@ -22,8 +22,13 @@ build-release:
 # Pull and native debug build.
 gbuild: pull build
 
-# Pull, native release build and install (JVM is an independent experimental target).
-rbuild: pull build-release install
+# Pull, build/install native release binaries, then build and test both WASM-to-JVM targets.
+# wasm2jar-test-all also builds the xcat/cptx WASI modules through build-wasm.
+rbuild: pull build-release install wasm2jar-test-all
+
+# Install missing WASI/JVM build tools (Debian/Ubuntu; prompts for sudo if needed).
+install-wasm-tools:
+    python3 scripts/install_wasm_tools.py
 
 # Prepare JVM backend directory.
 jvm-target-dir:

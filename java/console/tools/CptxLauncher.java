@@ -180,6 +180,39 @@ public final class CptxLauncher {
         return stdout;
     }
 
+    /** Match the clipboard backend selection and fallback used by xcat. */
+    private static void copyToClipboard(byte[] bytes) throws IOException, InterruptedException {
+        List<String[]> candidates = new ArrayList<>();
+        if (System.getenv("WAYLAND_DISPLAY") != null)
+            candidates.add(new String[]{"wl-copy", "--type", "text/plain;charset=utf-8"});
+        if (System.getenv("DISPLAY") != null) {
+            candidates.add(new String[]{"xclip", "-selection", "clipboard"});
+            candidates.add(new String[]{"xsel", "--clipboard", "--input"});
+        }
+        if (candidates.isEmpty()) {
+            candidates.add(new String[]{"wl-copy", "--type", "text/plain;charset=utf-8"});
+            candidates.add(new String[]{"xclip", "-selection", "clipboard"});
+            candidates.add(new String[]{"xsel", "--clipboard", "--input"});
+        }
+        List<String> errors = new ArrayList<>();
+        for (String[] command : candidates) {
+            try {
+                Process process = new ProcessBuilder(command)
+                    .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+                    .redirectError(ProcessBuilder.Redirect.DISCARD).start();
+                try (OutputStream sink = process.getOutputStream()) {
+                    sink.write(bytes);
+                }
+                int status = process.waitFor();
+                if (status == 0) return;
+                errors.add(command[0] + " exited " + status);
+            } catch (IOException error) {
+                errors.add(command[0] + ": " + error.getMessage());
+            }
+        }
+        throw new IOException("Clipboard unavailable (" + String.join("; ", errors) + ")");
+    }
+
     /** Desktop mode: tmux -> original Rust WASM logic -> OS clipboard. */
     private static void desktop() throws Exception {
         byte[] pane = commandOutput("tmux", "capture-pane", "-p", "-S", "-");
@@ -196,17 +229,7 @@ public final class CptxLauncher {
             System.setOut(originalOut);
         }
         byte[] bytes = output.toByteArray();
-        String[] clipboard = System.getenv("WAYLAND_DISPLAY") != null
-            ? new String[] {"wl-copy", "--type", "text/plain;charset=utf-8"}
-            : new String[] {"xclip", "-selection", "clipboard"};
-        Process process = new ProcessBuilder(clipboard)
-            .redirectOutput(ProcessBuilder.Redirect.DISCARD)
-            .redirectError(ProcessBuilder.Redirect.DISCARD).start();
-        try (OutputStream sink = process.getOutputStream()) {
-            sink.write(bytes);
-        }
-        int status = process.waitFor();
-        if (status != 0) throw new IOException(clipboard[0] + " exited " + status);
+        copyToClipboard(bytes);
     }
 
     public static void main(String[] args) {
