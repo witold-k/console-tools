@@ -179,6 +179,32 @@ def test_standalone(out, tool):
             if not (folder / "config-home" / "xcat" / "config.json").is_file():
                 raise RuntimeError("xcat JVM did not create default configuration")
             print("PASS: xcat JVM filesystem scan, UTF-8, config and clipboard")
+            # Regression: user-defined filters must override built-in defaults.
+            # A no_std build must not pass by merely creating a config file.
+            config_path = folder / "config-home" / "xcat" / "config.json"
+            config_path.write_text(json.dumps({
+                "scanendfilter": [".custom"],
+                "scanfullfilter": [],
+                "excludedirs": ["private"],
+                "max_file_bytes": 8,
+            }), encoding="utf-8")
+            (folder / "selected.custom").write_text("CUSTOM\\n", encoding="utf-8")
+            (folder / "hello.md").write_text("DEFAULT_MUST_NOT_APPEAR\\n", encoding="utf-8")
+            (folder / "too_big.custom").write_text("OVER_THE_LIMIT\\n", encoding="utf-8")
+            private = folder / "private"
+            private.mkdir()
+            (private / "secret.custom").write_text("PRIVATE_MUST_NOT_APPEAR\\n", encoding="utf-8")
+            configured = subprocess.run(["java", "-jar", str(out), "-d", "."],
+                                        cwd=folder, env=env, capture_output=True, text=True)
+            if configured.returncode:
+                raise RuntimeError(f"xcat JVM custom config failed: {configured.stderr}")
+            actual = clipboard.read_text(encoding="utf-8")
+            if "CUSTOM" not in actual or any(word in actual for word in (
+                "DEFAULT_MUST_NOT_APPEAR", "OVER_THE_LIMIT", "PRIVATE_MUST_NOT_APPEAR")):
+                raise RuntimeError("xcat JVM ignored custom JSON filters or max_file_bytes: "
+                                   + repr(actual[:1000]))
+            print("PASS: xcat JVM custom JSON filters, excludedirs, max_file_bytes")
+
             # Exercise custom directory/config, task execution and standalone mode.
             project = folder / "project"
             project.mkdir()

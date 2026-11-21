@@ -240,6 +240,32 @@ public final class CptxLauncher {
         throw new IOException("Clipboard unavailable (" + String.join("; ", errors) + ")");
     }
 
+    private static boolean hasClipboardEnvelope(byte[] data) {
+        byte[] magic = new byte[]{'C','T','C','L','I','P','1',0};
+        if (data.length < magic.length + 1) return false;
+        for (int i = 0; i < magic.length; i++)
+            if (data[i] != magic[i]) return false;
+        return true;
+    }
+
+    /** Compatibility bridge for the experimental no_std module only. */
+    private static void copyRawNoStdToClipboard(byte[] data)
+            throws IOException, InterruptedException {
+        List<String[]> commands = new ArrayList<>();
+        if (System.getenv("WAYLAND_DISPLAY") != null)
+            commands.add(new String[]{"wl-copy", "--type", "text/plain;charset=utf-8"});
+        if (System.getenv("DISPLAY") != null) {
+            commands.add(new String[]{"xclip", "-selection", "clipboard"});
+            commands.add(new String[]{"xsel", "--clipboard", "--input"});
+        }
+        if (commands.isEmpty()) {
+            commands.add(new String[]{"wl-copy", "--type", "text/plain;charset=utf-8"});
+            commands.add(new String[]{"xclip", "-selection", "clipboard"});
+            commands.add(new String[]{"xsel", "--clipboard", "--input"});
+        }
+        runClipboardCommands(commands, data);
+    }
+
     /** Desktop mode: tmux -> original Rust WASM logic -> OS clipboard. */
     private static void desktop() throws Exception {
         byte[] pane = commandOutput("tmux", "capture-pane", "-p", "-S", "-");
@@ -256,7 +282,22 @@ public final class CptxLauncher {
             System.setOut(originalOut);
         }
         byte[] bytes = output.toByteArray();
-        copyToClipboard(bytes);
+        // The experimental no_std WASI module emits raw UTF-8 rather than
+        // the CTCLIP1 envelope used by the regular Rust WASI implementation.
+        // Validate the complete capture before allowing any clipboard side effect.
+        if (!hasClipboardEnvelope(bytes)) {
+            java.nio.charset.CharsetDecoder decoder = StandardCharsets.UTF_8.newDecoder()
+                .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT);
+            try {
+                decoder.decode(ByteBuffer.wrap(bytes));
+            } catch (java.nio.charset.CharacterCodingException ex) {
+                throw new IOException("cptx: invalid UTF-8", ex);
+            }
+            copyRawNoStdToClipboard(bytes);
+        } else {
+            copyToClipboard(bytes);
+        }
     }
 
     public static void main(String[] args) {

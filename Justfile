@@ -22,11 +22,11 @@ build-release:
 # Pull and pinned-Nightly debug build.
 gbuild: pull build
 
-# Pull, build/install native release binaries, then build and test both WASM-to-JVM targets.
-# wasm2jar-test-all also builds the xcat/cptx WASI modules through build-wasm.
+# Pull, build/test/install native release binaries, then build, ProGuard-optimize,
+# regression-test and publish both no_std JVM distributions.
+# Do not run promote_nightly_artifacts.py here: it overwrites the small JARs.
 # Print the four deliverable sizes only after every build and test succeeds.
-rbuild: pull build-release install wasm-nightly-immediate-abort
-    python3 scripts/promote_nightly_artifacts.py
+rbuild: pull build-release install jvm-no-std-proguard-publish
     python3 -c 'from pathlib import Path; t=Path("{{cargo_target_dir}}"); products=[("xcat (native)",t/"release/xcat"),("cptx (native)",t/"release/cptx"),("xcat (JVM)",t/"wasm2jar-probe/xcat-standalone.jar"),("cptx (JVM)",t/"wasm2jar-probe/cptx-standalone.jar")]; print(); print("Final product sizes:"); [(print(f"  {name:<16} {p.stat().st_size:>12,} bytes  ({p.stat().st_size/1024:>8.1f} KiB)  {p}")) for name,p in products]'
 
 # Show the 30 largest functions in both native release binaries.
@@ -267,3 +267,47 @@ cptx-proguard-relaxed-keep: wasm2jar-test-cptx
 # Nondeterministic class metadata is not a release gate.
 cptx-jvm-reproducibility:
     python3 scripts/cptx_jvm_reproducibility.py
+
+# Experimental no_std JVM cptx: compile the existing no_std WASI implementation,
+# package it as a standalone JAR and run CLI, UTF-8, WASI and desktop clipboard tests.
+# Keeps native binaries and the regular JVM distribution untouched.
+jvm-no-std-cptx:
+    python3 scripts/wasi_no_std_jvm_test.py no_std_cptx --output-jar "{{cargo_target_dir}}/wasm2jar-probe/cptx-no-std-standalone.jar"
+
+# Compare the functional no_std cptx prototype against the current JVM JAR.
+jvm-no-std-size-compare: jvm-no-std-cptx
+    python3 -c 'from pathlib import Path; t=Path("{{cargo_target_dir}}")/"wasm2jar-probe"; files=[t/"cptx-standalone.jar",t/"cptx-no-std-standalone.jar"]; [(print(f"{p.name}: {p.stat().st_size:,} bytes" if p.exists() else f"{p.name}: not built")) for p in files]'
+
+# Compile the experimental no_std xcat scanner to WASI without Rust std.
+# Not a replacement for the regular xcat JAR: custom config and task reports
+# are still missing. Kept separate from rbuild and published artifacts.
+jvm-no-std-xcat-prototype:
+    mkdir -p "{{cargo_target_dir}}/no-std-xcat"
+    rustc --edition=2024 --target wasm32-wasip1 --crate-type=cdylib experiments/no_std_xcat.rs -o "{{cargo_target_dir}}/no-std-xcat/xcat.wasm" -C opt-level=z -C lto=fat -C codegen-units=1 -C panic=abort -C strip=symbols -C link-arg=--export=_start
+    wasm-opt -Oz --enable-bulk-memory --strip-debug --strip-producers "{{cargo_target_dir}}/no-std-xcat/xcat.wasm" -o "{{cargo_target_dir}}/no-std-xcat/xcat.opt.wasm"
+    python3 -c 'from pathlib import Path; p=Path("{{cargo_target_dir}}/no-std-xcat/xcat.opt.wasm"); print(f"Experimental no_std xcat WASM: {p.stat().st_size:,} bytes")'
+
+# Full JVM integration gate for the experimental no_std xcat implementation.
+# Deliberately isolated; only publish after all existing xcat tests pass.
+jvm-no-std-xcat-test: jvm-no-std-xcat-prototype
+    mkdir -p "{{cargo_target_dir}}/no-std-xcat"
+    wasm2jar --output-class console/tools/Xcat --jar "{{cargo_target_dir}}/no-std-xcat/xcat-translated.jar" "{{cargo_target_dir}}/no-std-xcat/xcat.opt.wasm"
+    python3 scripts/wasm2jar_run.py --tool xcat --input-jar "{{cargo_target_dir}}/no-std-xcat/xcat-translated.jar" --output-jar "{{cargo_target_dir}}/no-std-xcat/xcat-no-std-standalone.jar"
+    python3 -c 'from pathlib import Path; p=Path("{{cargo_target_dir}}/no-std-xcat/xcat-no-std-standalone.jar"); print(f"Experimental no_std xcat JAR: {p.stat().st_size:,} bytes")'
+
+# Release gate: the experimental no_std xcat must pass custom JSON filter
+# regression tests before it may replace the default JVM artifact.
+# ProGuard is not part of jvm-no-std-xcat-test; its size is pre-ProGuard.
+jvm-no-std-xcat-release-gate: jvm-no-std-xcat-test
+    @echo "no_std xcat functional regression gate passed"
+
+# Build both no_std JVM candidates, optimize each with ProGuard and rerun
+# the full existing JVM end-to-end suite on the optimized JARs.
+# Does not replace the default artifacts.
+jvm-no-std-proguard: jvm-no-std-xcat-release-gate jvm-no-std-cptx
+    python3 scripts/no_std_proguard.py
+
+# Publish both verified ProGuard JARs as the standard wasm2jar-probe
+# distributions. No publishing occurs if either test fails.
+jvm-no-std-proguard-publish: jvm-no-std-xcat-release-gate jvm-no-std-cptx
+    python3 scripts/no_std_proguard.py --publish
