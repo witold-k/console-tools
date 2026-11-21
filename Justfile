@@ -1,6 +1,6 @@
 cargo_target_dir := `cargo metadata --no-deps --format-version 1 | python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])'`
 
-# Default native debug build.
+# Default pinned-Nightly native debug build.
 default: build
 
 # Clear tmux and terminal.
@@ -11,20 +11,47 @@ clear:
 pull:
     python3 scripts/build.py github_pull
 
-# Native debug build and tests.
+# Pinned-Nightly native debug build and tests.
 build:
     python3 scripts/build.py build-debug
 
-# Native release build and tests.
+# Pinned-Nightly native immediate-abort release build and tests.
 build-release:
     python3 scripts/build.py build-release
 
-# Pull and native debug build.
+# Pull and pinned-Nightly debug build.
 gbuild: pull build
 
 # Pull, build/install native release binaries, then build and test both WASM-to-JVM targets.
 # wasm2jar-test-all also builds the xcat/cptx WASI modules through build-wasm.
-rbuild: pull build-release install wasm2jar-test-all
+# Print the four deliverable sizes only after every build and test succeeds.
+rbuild: pull build-release install wasm-nightly-immediate-abort
+    python3 scripts/promote_nightly_artifacts.py
+    python3 -c 'from pathlib import Path; t=Path("{{cargo_target_dir}}"); products=[("xcat (native)",t/"release/xcat"),("cptx (native)",t/"release/cptx"),("xcat (JVM)",t/"wasm2jar-probe/xcat-standalone.jar"),("cptx (JVM)",t/"wasm2jar-probe/cptx-standalone.jar")]; print(); print("Final product sizes:"); [(print(f"  {name:<16} {p.stat().st_size:>12,} bytes  ({p.stat().st_size/1024:>8.1f} KiB)  {p}")) for name,p in products]'
+
+# Show the 30 largest functions in both native release binaries.
+# Requires cargo-bloat (cargo install cargo-bloat).
+bloat:
+    cargo bloat --release --bin xcat -n 30
+    cargo bloat --release --bin cptx -n 30
+
+# Experimental native release build with a locally rebuilt Rust standard library.
+# Requires nightly and rust-src. Does not install or replace rbuild artifacts.
+native-nightly:
+    cargo +nightly -Z build-std=std,panic_abort build --release -p console-tools --bin xcat --bin cptx
+    python3 -c 'from pathlib import Path; t=Path("{{cargo_target_dir}}")/"release"; [(print(f"{name}: {(t/name).stat().st_size:,} bytes")) for name in ("xcat","cptx")]'
+
+# Experimental immediate-abort panic strategy, scoped to Cargo's release profile.
+# Unlike global RUSTFLAGS, this avoids forcing the strategy onto host build scripts.
+native-nightly-immediate-abort:
+    cargo +nightly -Z panic-immediate-abort -Z build-std=std,panic_abort --config 'profile.release.panic="immediate-abort"' build --release -p console-tools --bin xcat --bin cptx
+    python3 -c 'from pathlib import Path; t=Path("{{cargo_target_dir}}")/"release"; [(print(f"{name}: {(t/name).stat().st_size:,} bytes")) for name in ("xcat","cptx")]'
+
+# Run stable tests, rebuild the tiny native binaries, then exercise their real CLI entrypoints.
+# xcat's scan copies files to the system clipboard; cptx's tmux capture remains manual.
+native-nightly-test: native-nightly-immediate-abort
+    cargo test -p console-tools
+    python3 -c 'import subprocess; from pathlib import Path; t=Path("{{cargo_target_dir}}")/"release"; cases=[("xcat",["--help"],0,"Usage:"),("cptx",["--help"],0,"Usage:"),("xcat",["--definitely-invalid"],1,None),("cptx",["--definitely-invalid"],1,None)]; [(lambda p,name,args,code,needle: (print(f"{name} {args}: exit {p.returncode}"), (_ for _ in ()).throw(RuntimeError(f"{name} {args}: unexpected result: {p.stdout!r} {p.stderr!r}")) if (p.returncode==0)!=(code==0) or (needle and needle not in p.stdout) else None))(subprocess.run([str(t/name),*args],capture_output=True,text=True),name,args,code,needle) for name,args,code,needle in cases]; print("Native Nightly CLI smoke tests passed")'
 
 # Install missing WASI/JVM build tools (Debian/Ubuntu; prompts for sudo if needed).
 install-wasm-tools:
@@ -75,9 +102,9 @@ jvm-artifacts:
 wasm-setup:
     python3 scripts/wasm.py setup
 
-# Build native tests and xcat/cptx WASI modules offline.
-build-wasm:
-    python3 scripts/wasm.py build
+# Build and test pinned-Nightly WASI modules and JVM artifacts.
+build-wasm: wasm-nightly-immediate-abort
+    python3 scripts/promote_nightly_artifacts.py
 
 # Build a separate small Wasmi + WASI runner (requires crates.io on first build).
 build-wasmi:
@@ -137,28 +164,41 @@ wasm2jar-probe:
 # Convert the existing cptx WASI module to JVM bytecode and measure the JAR.
 # This does not imply WASI host functions are linked or executable.
 wasm2jar-cptx: build-wasm
-    python3 scripts/wasm2jar_probe.py try-convert --tool cptx -- --output-class console/tools/Cptx --jar {out} {wasm}
 
-# Default cptx JVM: tested no_std WASI + aggressive ProGuard relaxed keep.
-# Preserve the unoptimized baseline for parity checks and diagnostics.
-wasm2jar-test-cptx:
-    python3 scripts/wasi_no_std_jvm_test.py no_std_cptx --output-jar "{{cargo_target_dir}}/wasm2jar-probe/cptx-standalone-unoptimized.jar"
-    python3 scripts/cptx_proguard_experiment.py --baseline "{{cargo_target_dir}}/wasm2jar-probe/cptx-standalone-unoptimized.jar" --aggressive-only --relaxed-keep --promote-to "{{cargo_target_dir}}/wasm2jar-probe/cptx-standalone.jar"
+# Default cptx JVM: production Rust std/WASI module and Rust-owned clipboard policy.
+# Package the translated module and validate desktop tmux/clipboard integration.
+wasm2jar-test-cptx: build-wasm
 
-# Retain the original std-based cptx JVM implementation for comparisons.
-wasm2jar-test-cptx-std: wasm2jar-cptx
-    python3 scripts/wasm2jar_run.py
+# Compatibility alias for the previous explicit std recipe.
+wasm2jar-test-cptx-std: wasm2jar-test-cptx
 
 # Convert xcat WASI to JVM bytecode with a small Java WASI filesystem host.
 wasm2jar-xcat: build-wasm
-    python3 scripts/wasm2jar_probe.py try-convert --tool xcat -- --output-class console/tools/Xcat --jar {out} {wasm}
 
 # Package xcat and test --help, filesystem scanning, config and clipboard.
-wasm2jar-test-xcat: wasm2jar-xcat
-    python3 scripts/wasm2jar_run.py --tool xcat
+wasm2jar-test-xcat: build-wasm
 
-# Run the available JVM translation smoke tests for both tools.
-wasm2jar-test-all: wasm2jar-test-cptx wasm2jar-test-xcat
+# Run the pinned-Nightly JVM integration tests and promote verified artifacts.
+wasm2jar-test-all: build-wasm
+
+# Install the pinned official Rust Nightly and its WASI build components.
+# Explicit setup only: the build recipes never install or update toolchains.
+# wasm-opt (Binaryen), wasm2jar, and a JDK are separate system dependencies.
+wasm-nightly-setup:
+    rustup toolchain install nightly-2026-11-21 --profile minimal --component rust-src
+    rustup target add wasm32-wasip1 --toolchain nightly-2026-11-21
+    rustc +nightly-2026-11-21 -vV
+
+# Compare isolated pinned-Nightly WASI/JVM artifacts with production baselines.
+# Run wasm-nightly-setup once; requires wasm-opt, wasm2jar and Java tools.
+# Runs both Java end-to-end suites; does not replace production artifacts.
+wasm-nightly-immediate-abort:
+    python3 scripts/wasm_nightly_immediate_abort.py
+
+# Control: same nightly build-std/WASI/JVM pipeline, but conventional panic=abort.
+# Compare with wasm-nightly-immediate-abort without overwriting either output.
+wasm-nightly-abort:
+    python3 scripts/wasm_nightly_immediate_abort.py --panic abort
 
 # Inspect per-section WASM and per-class compressed/uncompressed JAR sizes.
 wasm-size-report:

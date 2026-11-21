@@ -8,14 +8,37 @@ and task output back to the clipboard. It is based on
 
 ## Build
 
+The default `just` commands use the **pinned Rust Nightly
+`nightly-2026-11-21`**. Release builds of `xcat` and `cptx` rebuild
+the Rust standard library with `panic=immediate-abort` to minimize size.
+This changes panic behavior: no unwinding or panic hooks.
+
+Install the toolchain and WASI target once:
+
 ```sh
-cargo build --release --bins
-# For a standalone checkout, binaries are typically in ./target/release/.
-# For a parent Cargo workspace, use the workspace target directory instead.
-TARGET_DIR=$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')
-"$TARGET_DIR/release/xcat" --help
-"$TARGET_DIR/release/cptx" --help
+just wasm-nightly-setup
 ```
+
+The JVM pipeline additionally needs `wasm2jar` 0.1.0, Binaryen's
+`wasm-opt`, and a JDK (`java`, `javac`, `jar`).
+See the pinned Nightly section below for details.
+
+```sh
+just build          # pinned Nightly native debug build, tests, Clippy
+just gbuild         # pull current branch, then build
+just build-release  # pinned Nightly immediate-abort native release, tests, Clippy
+just rbuild         # pull, build/install native tools, build/test JVM, publish JARs
+just build-wasm     # pinned Nightly WASI + JVM integration tests and publication
+just wasm2jar-test-all # same pinned Nightly JVM pipeline
+```
+
+The normal output paths remain the Cargo workspace's
+`target/release/{xcat,cptx}`, `target/wasm32-wasip1/release/*.wasm`,
+and `target/wasm2jar-probe/*-standalone.jar`. The Nightly WASI/JVM
+build first runs in isolated directories, tests both JVM tools, and only
+then publishes the verified artifacts. Native `install` copies the
+already-built binaries instead of silently recompiling with Stable.
+`wasm-host` remains a separate native bridge.
 
 For clipboard access on Linux, install **wl-clipboard** (`wl-copy`) for
 Wayland or **xclip** / **xsel** for X11. Windows uses PowerShell
@@ -126,6 +149,61 @@ flags are intentionally rejected on WASI.
 those paths; run trusted modules. `xcat -e/-r` executes local programs.
 Native builds remain available without WASM. Windows host-bridge parity
 has not been verified.
+
+## Pinned Nightly WASI/JVM size experiment
+
+The regular `just rbuild` pipeline now uses this pinned Nightly build. This pipeline
+rebuilds Rust's standard library with `panic=immediate-abort` and translates
+the resulting WASI modules into standalone Java JARs. The script validates
+the compiler commit before building and leaves production artifacts untouched.
+
+### Installation and commands
+
+Install `rustup` and `just` first. On a machine with a working rustup
+installation, run the **explicit one-time setup**:
+
+```sh
+just wasm-nightly-setup
+```
+
+This installs the official `nightly-2026-11-21` toolchain, `rust-src`,
+and its separate `wasm32-wasip1` target. If rustup is managed under a
+nonstandard prefix (such as `/opt/rust`), configure `RUSTUP_HOME` and
+`CARGO_HOME` consistently before running setup; don't mix installations.
+
+Other prerequisites are Python 3, `wasm2jar` 0.1.0, Binaryen's `wasm-opt`,
+and a JDK with `java`, `javac`, and `jar`. On Debian/Ubuntu, for example,
+`sudo apt install binaryen openjdk-25-jdk` provides Binaryen and a JDK
+where those packages are available. Install `wasm2jar` separately using
+the project's existing instructions. The build recipes deliberately **do not**
+install packages or toolchains themselves.
+
+```sh
+just wasm-nightly-immediate-abort  # smaller experimental WASI + JAR artifacts; full JVM tests
+just wasm-nightly-abort            # matched control with conventional panic=abort
+```
+
+The outputs live under `<Cargo target directory>/wasm-nightly-immediate-abort/`
+and `.../wasm-nightly-abort/`. The scripts print sizes and compare them with
+available baselines. Rust panic handling is different: immediate-abort
+terminates without unwinding or running panic hooks.
+
+### Verified toolchain and results (21 November 2026)
+
+- Rust `nightly-2026-11-21`, rustc `1.102.0-nightly`, commit
+  `c7d5ba59d8e11ee2e2204b173458eec4cb41c973`, LLVM 23.1.6.
+- Binaryen `wasm-opt` 120; OpenJDK `25.0.5.0.3`; `wasm2jar`
+  executable at `~/.cargo/bin/wasm2jar` (converter version documented as 0.1.0).
+- Immediate-abort: xcat WASM **89,499 B**, JAR **91,902 B**;
+  cptx WASM **41,371 B**, JAR **46,619 B**.
+- The Java integration suites passed, including tmux/clipboard transfers up to
+  336,000 bytes, UTF-8, filesystem scanning, configuration, and task execution.
+
+Only Rust Nightly is pinned and its compiler commit checked automatically;
+the other versions are recorded, not enforced. This supports repeating the
+build later, but does not guarantee that upstream downloads will remain
+available or that JAR files will be byte-identical. No container or private
+toolchain archive is part of this setup.
 
 ## WASM-to-JVM translation (wasm2jar, experimental)
 

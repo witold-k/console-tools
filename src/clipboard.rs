@@ -5,6 +5,27 @@
 #[cfg(not(target_os = "wasi"))]
 use std::{io::{self, Write}, process::{Command, Stdio}};
 
+/// Ordered clipboard commands, shared between native Rust and JVM/WASI.
+fn candidates() -> Vec<(&'static str, &'static [&'static str])> {
+    let mut result = Vec::new();
+    if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+        result.push(("wl-copy", &["--type", "text/plain;charset=utf-8"] as &[&str]));
+    }
+    if std::env::var_os("DISPLAY").is_some() {
+        result.push(("xclip", &["-selection", "clipboard"]));
+        result.push(("xsel", &["--clipboard", "--input"]));
+    }
+    if result.is_empty() {
+        result.extend([
+            ("wl-copy", &["--type", "text/plain;charset=utf-8"] as &[&str]),
+            ("xclip", &["-selection", "clipboard"]),
+            ("xsel", &["--clipboard", "--input"]),
+        ]);
+    }
+    result
+}
+
+
 #[cfg(not(target_os = "wasi"))]
 fn copy_with(program: &str, args: &[&str], text: &str) -> io::Result<()> {
     // Never pipe stderr from a clipboard owner: X11 tools may fork a daemon
@@ -43,22 +64,7 @@ pub fn copy(text: &str) -> io::Result<()> {
     #[cfg(not(windows))]
     {
         let mut errors = Vec::new();
-        let mut candidates: Vec<(&str, &[&str])> = Vec::new();
-        if std::env::var_os("WAYLAND_DISPLAY").is_some() {
-            candidates.push(("wl-copy", &["--type", "text/plain;charset=utf-8"]));
-        }
-        if std::env::var_os("DISPLAY").is_some() {
-            candidates.push(("xclip", &["-selection", "clipboard"]));
-            candidates.push(("xsel", &["--clipboard", "--input"]));
-        }
-        if candidates.is_empty() {
-            candidates.extend([
-                ("wl-copy", &["--type", "text/plain;charset=utf-8"] as &[&str]),
-                ("xclip", &["-selection", "clipboard"]),
-                ("xsel", &["--clipboard", "--input"]),
-            ]);
-        }
-        for (program, args) in candidates {
+        for (program, args) in candidates() {
             match copy_with(program, args, text) {
                 Ok(()) => return Ok(()),
                 Err(e) => errors.push(format!("{program}: {e}")),
@@ -74,5 +80,19 @@ pub fn copy(text: &str) -> io::Result<()> {
 #[cfg(target_os = "wasi")]
 pub fn copy(text: &str) -> std::io::Result<()> {
     use std::io::Write;
-    std::io::stdout().write_all(text.as_bytes())
+    let mut output = std::io::stdout().lock();
+    if std::env::var_os("CONSOLE_TOOLS_JVM_CLIPBOARD").is_some() {
+        output.write_all(b"CTCLIP1\0")?;
+        let commands = candidates();
+        output.write_all(&[commands.len() as u8])?;
+        for (program, args) in commands {
+            output.write_all(program.as_bytes())?;
+            output.write_all(&[0, args.len() as u8])?;
+            for arg in args {
+                output.write_all(arg.as_bytes())?;
+                output.write_all(&[0])?;
+            }
+        }
+    }
+    output.write_all(text.as_bytes())
 }

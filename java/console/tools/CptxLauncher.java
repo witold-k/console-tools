@@ -16,12 +16,16 @@ public final class CptxLauncher {
     private final String[] argv;
     private final String[] environment;
 
-    private CptxLauncher(String[] args) {
+    private CptxLauncher(String[] args) { this(args, false); }
+
+    private CptxLauncher(String[] args, boolean desktop) {
         argv = new String[args.length + 1];
         argv[0] = "cptx";
         System.arraycopy(args, 0, argv, 1, args.length);
-        environment = System.getenv().entrySet().stream()
-            .map(e -> e.getKey() + "=" + e.getValue()).toArray(String[]::new);
+        List<String> vars = new ArrayList<>();
+        System.getenv().forEach((k, v) -> vars.add(k + "=" + v));
+        if (desktop) vars.add("CONSOLE_TOOLS_JVM_CLIPBOARD=1");
+        environment = vars.toArray(String[]::new);
     }
 
     private ByteBuffer mem() {
@@ -180,28 +184,51 @@ public final class CptxLauncher {
         return stdout;
     }
 
-    /** Match the clipboard backend selection and fallback used by xcat. */
-    private static void copyToClipboard(byte[] bytes) throws IOException, InterruptedException {
-        List<String[]> candidates = new ArrayList<>();
-        if (System.getenv("WAYLAND_DISPLAY") != null)
-            candidates.add(new String[]{"wl-copy", "--type", "text/plain;charset=utf-8"});
-        if (System.getenv("DISPLAY") != null) {
-            candidates.add(new String[]{"xclip", "-selection", "clipboard"});
-            candidates.add(new String[]{"xsel", "--clipboard", "--input"});
+    /** Execute only the commands selected by Rust; no clipboard policy in Java. */
+    private static void copyToClipboard(byte[] data) throws IOException, InterruptedException {
+        byte[] magic = new byte[]{'C','T','C','L','I','P','1',0};
+        if (data.length < magic.length + 1)
+            throw new IOException("Missing Rust clipboard host protocol");
+        for (int i = 0; i < magic.length; i++)
+            if (data[i] != magic[i])
+                throw new IOException("Invalid Rust clipboard host protocol");
+        int pos = magic.length;
+        int count = Byte.toUnsignedInt(data[pos++]);
+        if (count < 1 || count > 8) throw new IOException("Invalid clipboard candidate count");
+        List<String[]> commands = new ArrayList<>();
+        for (int i = 0; i < count; i++) {
+            List<String> argv = new ArrayList<>();
+            int start = pos;
+            while (pos < data.length && data[pos] != 0) pos++;
+            if (pos >= data.length || pos == start) throw new IOException("Invalid clipboard command");
+            argv.add(new String(data, start, pos - start, StandardCharsets.UTF_8));
+            pos++;
+            if (pos >= data.length) throw new IOException("Missing clipboard argument count");
+            int argc = Byte.toUnsignedInt(data[pos++]);
+            if (argc > 8) throw new IOException("Invalid clipboard argument count");
+            for (int j = 0; j < argc; j++) {
+                start = pos;
+                while (pos < data.length && data[pos] != 0) pos++;
+                if (pos >= data.length) throw new IOException("Unterminated clipboard argument");
+                argv.add(new String(data, start, pos - start, StandardCharsets.UTF_8));
+                pos++;
+            }
+            commands.add(argv.toArray(String[]::new));
         }
-        if (candidates.isEmpty()) {
-            candidates.add(new String[]{"wl-copy", "--type", "text/plain;charset=utf-8"});
-            candidates.add(new String[]{"xclip", "-selection", "clipboard"});
-            candidates.add(new String[]{"xsel", "--clipboard", "--input"});
-        }
+        byte[] payload = Arrays.copyOfRange(data, pos, data.length);
+        runClipboardCommands(commands, payload);
+    }
+
+    private static void runClipboardCommands(List<String[]> commands, byte[] payload)
+            throws IOException, InterruptedException {
         List<String> errors = new ArrayList<>();
-        for (String[] command : candidates) {
+        for (String[] command : commands) {
             try {
                 Process process = new ProcessBuilder(command)
                     .redirectOutput(ProcessBuilder.Redirect.DISCARD)
                     .redirectError(ProcessBuilder.Redirect.DISCARD).start();
                 try (OutputStream sink = process.getOutputStream()) {
-                    sink.write(bytes);
+                    sink.write(payload);
                 }
                 int status = process.waitFor();
                 if (status == 0) return;
@@ -222,7 +249,7 @@ public final class CptxLauncher {
         try {
             System.setIn(new ByteArrayInputStream(pane));
             System.setOut(new PrintStream(output, true, StandardCharsets.UTF_8));
-            int status = new CptxLauncher(new String[0]).execute();
+            int status = new CptxLauncher(new String[0], true).execute();
             if (status != 0) throw new IOException("Rust WASM cptx exited " + status);
         } finally {
             System.setIn(originalIn);

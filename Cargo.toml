@@ -6,13 +6,6 @@ edition = "2024"
 # The native binaries and wasm32-wasip1 build use only the Rust standard library.
 [dependencies]
 
-[profile.release]
-lto = true
-codegen-units = 1
-opt-level = "z"
-strip = "debuginfo"
-panic = "abort"
-
 [[bin]]
 name = "xcat"
 path = "src/bin/xcat.rs"

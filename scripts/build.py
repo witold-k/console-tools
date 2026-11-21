@@ -141,9 +141,19 @@ def github_pull():
     return status
 
 
+TOOLCHAIN = "nightly-2026-11-21"
+HOST = "x86_64-unknown-linux-gnu"
+
+
 def build(release=False):
     """Build, test and lint; capture pane on failure."""
     cargo_flags = ["--release"] if release else []
+    native_build = (["cargo", f"+{TOOLCHAIN}", "-Z", "panic-immediate-abort",
+                     "-Z", "build-std=std,panic_abort",
+                     "--config", 'profile.release.panic="immediate-abort"',
+                     "build", "--release", "--target", HOST,
+                     "-p", "console-tools", "--bin", "xcat", "--bin", "cptx"]
+                    if release else ["cargo", f"+{TOOLCHAIN}", "build"])
 
     test_env = os.environ.copy()
     test_env["RUST_BACKTRACE"] = "1"
@@ -153,9 +163,9 @@ def build(release=False):
 
     commands = [
         (["git", "branch"], None),
-        (["cargo", "build", *cargo_flags], None),
-        (["cargo", "test", *cargo_flags], test_env),
-        (["cargo", "clippy"], None),
+        (native_build, None),
+        (["cargo", f"+{TOOLCHAIN}", "test", *cargo_flags], test_env),
+        (["cargo", f"+{TOOLCHAIN}", "clippy"], None),
     ]
 
     for command, env in commands:
@@ -165,6 +175,22 @@ def build(release=False):
             capture_pane()
             return status
 
+    if release:
+        # The host is a separate native bridge; it is not part of the tiny CLI build.
+        status = run("cargo", f"+{TOOLCHAIN}", "build", "--release", "--bin", "wasm-host")
+        if status != 0:
+            return status
+        # Keep the conventional target/release locations for downstream recipes.
+        import json
+        import shutil
+        target = Path(json.loads(subprocess.check_output(
+            ["cargo", "metadata", "--no-deps", "--format-version", "1"], text=True
+        ))["target_directory"])
+        for name in ("xcat", "cptx"):
+            source = target / HOST / "release" / name
+            destination = target / "release" / name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, destination)
     return 0
 
 
