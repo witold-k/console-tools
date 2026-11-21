@@ -18,6 +18,7 @@ public final class XcatLauncher {
     private final Map<Integer,Path> paths=new HashMap<>();
     private final Map<Integer,Long> offsets=new HashMap<>();
     private final ByteArrayOutputStream output=new ByteArrayOutputStream();
+    private final ByteArrayOutputStream diagnostics=new ByteArrayOutputStream();
     private int nextFd=6;
     private final Path root;
     private final Path cfg;
@@ -124,7 +125,7 @@ public final class XcatLauncher {
             long base = unsigned(iovs), n = unsigned(count);
             if (n > MAX_IOVECS) return INVAL;
             check(m, base, n * 8); check(m, unsigned(nwritten), 4);
-            OutputStream stream = fd == 2 ? System.err : null;
+            OutputStream stream = fd == 2 ? diagnostics : null;
             int total = 0;
             for (int i = 0; i < n; i++) {
                 int address = m.getInt((int) (base + i * 8L));
@@ -427,8 +428,26 @@ public final class XcatLauncher {
     private static byte[] runWasm(String[] args, Path root, Path cfg, Path report) throws Exception {
         XcatLauncher host=new XcatLauncher(args,root,cfg,report);
         int status=host.execute();
+        if(host.diagnostics.size()>0)System.err.write(host.diagnostics.toByteArray());
         if(status!=0)throw new IOException("xcat WASM exited "+status);
         return host.output.toByteArray();
+    }
+    private static final class ScanResult {
+        final byte[] contents;
+        final int files;
+        ScanResult(byte[] contents,int files){this.contents=contents;this.files=files;}
+    }
+    private static ScanResult runScan(Path root,Path cfg) throws Exception {
+        XcatLauncher host=new XcatLauncher(new String[]{"-d",".","-c","/cfg/"+cfg.getFileName()},root,cfg.getParent(),null);
+        int status=host.execute();
+        String metadata=host.diagnostics.toString(StandardCharsets.UTF_8);
+        if(status!=0){System.err.print(metadata);throw new IOException("xcat WASM exited "+status);}
+        if(!metadata.matches("XCAT_FILES:[0-9]+\\n")){
+            System.err.print(metadata);
+            throw new IOException("Missing or malformed xcat WASM file count");
+        }
+        int files=Integer.parseInt(metadata.substring(11,metadata.length()-1));
+        return new ScanResult(host.output.toByteArray(),files);
     }
     private static int taskStatus(Process process) throws InterruptedException {
         return process.waitFor();
@@ -495,10 +514,10 @@ public final class XcatLauncher {
             byte[] scan=new byte[0];
             if(!o.standalone){
                 Files.createDirectories(o.config.getParent());
-                scan=runWasm(new String[]{"-d",".","-c","/cfg/"+o.config.getFileName()},
-                    o.root,o.config.getParent(),null);
+                ScanResult result=runScan(o.root,o.config);
+                scan=result.contents;
                 copyToClipboard(scan);
-                System.err.println("Copied scanned files to clipboard.");
+                System.err.println("Copied "+result.files+" scanned files to clipboard.");
             }
             if(o.task!=null){
                 try {

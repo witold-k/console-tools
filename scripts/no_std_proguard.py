@@ -13,6 +13,8 @@ import tempfile
 
 from jvm import proguard_executable, java_home
 from wasm2jar_run import test_standalone
+from wasi_no_std_jvm_test import test_desktop_failures, test_wasi_io_errors, test_partial_wasi_writes
+import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -24,7 +26,7 @@ def target_dir():
     return Path(json.loads(metadata)["target_directory"])
 
 
-def optimize(tool, baseline, output):
+def optimize(tool, baseline, output, keep_mode="minimal", deep_verify=False):
     if not baseline.is_file():
         raise FileNotFoundError(baseline)
     proguard = proguard_executable()
@@ -34,6 +36,33 @@ def optimize(tool, baseline, output):
     cap = tool.capitalize()
     launcher = f"console.tools.{cap}Launcher"
     wasm = f"console.tools.{cap}"
+    keep_generated = ("-keep class" if keep_mode == "conservative"
+                      else "-keep,allowshrinking,allowoptimization class")
+    launcher_rules = ([f"-keep class {launcher} {{ *; }}"] if keep_mode != "minimal" else [
+        f"-keep class {launcher} {{",
+        "    public static void main(java.lang.String[]);",
+        "    public int args_sizes_get(int,int);",
+        "    public int args_get(int,int);",
+        "    public int environ_sizes_get(int,int);",
+        "    public int environ_get(int,int);",
+        "    public int fd_read(int,int,int,int);",
+        "    public int fd_write(int,int,int,int);",
+        "    public void proc_exit(int);",
+        "    public int random_get(int,int);",
+        "    public int fd_close(int);",
+        "    public int fd_fdstat_get(int,int);",
+        "    public int fd_filestat_get(int,int);",
+        "    public int fd_prestat_get(int,int);",
+        "    public int fd_prestat_dir_name(int,int,int);",
+        "    public int fd_readdir(int,int,int,long,int);",
+        "    public int path_create_directory(int,int,int);",
+        "    public int path_filestat_get(int,int,int,int,int);",
+        "    public int path_open(int,int,int,int,int,long,long,int,int);",
+        "    public int path_readlink(int,int,int,int,int,int);",
+        "    <init>(java.lang.String[]);",
+        "    private int execute();",
+        "}",
+    ])
     rules = [
         f"-injars {baseline}",
         f"-outjars {output}",
@@ -47,10 +76,11 @@ def optimize(tool, baseline, output):
         "-mergeinterfacesaggressively",
         # Reflectively discovered WASI methods and generated WASM exports
         # must retain their names and descriptors.
-        f"-keep class {launcher} {{ *; }}",
-        f"-keep class {wasm} {{ *; }}",
-        f"-keep class {wasm}$* {{ *; }}",
-        "-keep class org.wasm2jar.** { *; }",
+        *launcher_rules,
+        *([f"-keep class {wasm} {{ public void _start(); }}"] if keep_mode != "conservative" else []),
+        f"{keep_generated} {wasm} {{ *; }}",
+        f"{keep_generated} {wasm}$* {{ *; }}",
+        f"{keep_generated} org.wasm2jar.** {{ *; }}",
         # ProGuard can still shrink unreachable Java library classes.
     ]
     with tempfile.TemporaryDirectory(prefix=f"{tool}-proguard-") as tmp:
@@ -61,6 +91,14 @@ def optimize(tool, baseline, output):
         if result.returncode:
             raise RuntimeError(f"{tool} ProGuard failed:\n{result.stdout[-3000:]}\n{result.stderr[-3000:]}")
     test_standalone(output, tool)
+    if deep_verify and tool == "cptx":
+        test_desktop_failures(output)
+        with tempfile.TemporaryDirectory(prefix="cptx-proguard-verify-") as tmp:
+            stage = Path(tmp)
+            with zipfile.ZipFile(output) as jar:
+                jar.extractall(stage)
+            test_wasi_io_errors(stage)
+            test_partial_wasi_writes(stage)
     print(f"PASS: {tool} ProGuard: {baseline.stat().st_size:,} -> {output.stat().st_size:,} bytes")
 
 
@@ -78,9 +116,17 @@ def promote(src, dest):
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--keep-mode", choices=("conservative", "relaxed", "minimal"), default="minimal",
+                        help="ProGuard keep policy (default: verified minimal)")
+    parser.add_argument("--deep-verify", action="store_true",
+                        help="Run cptx fault and partial-write harnesses")
     parser.add_argument("--publish", action="store_true",
                         help="Publish only after BOTH xcat and cptx regression suites pass")
     args = parser.parse_args()
+    if args.publish and args.keep_mode != "minimal":
+        parser.error("Only verified minimal keep mode may publish default artifacts")
+    if args.publish:
+        args.deep_verify = True
     target = target_dir()
     candidates = {
         "xcat": target / "no-std-xcat" / "xcat-no-std-standalone.jar",
@@ -88,9 +134,9 @@ def main():
     }
     optimized = {}
     for tool, baseline in candidates.items():
-        output = baseline.with_name(f"{tool}-no-std-proguard.jar")
+        output = baseline.with_name(f"{tool}-no-std-proguard-{args.keep_mode}.jar")
         output.unlink(missing_ok=True)
-        optimize(tool, baseline, output)
+        optimize(tool, baseline, output, keep_mode=args.keep_mode, deep_verify=args.deep_verify)
         optimized[tool] = output
     if args.publish:
         # Both candidates were successfully built and independently tested.

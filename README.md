@@ -6,6 +6,27 @@ single clipboard text, optionally runs a task, and copies the combined source
 and task output back to the clipboard. It is based on
 [buildscripts/lua/bin/xcat.lua](https://github.com/witold-k/buildscripts/blob/master/lua/bin/xcat.lua).
 
+## Verified no_std JVM ProGuard release (21 November 2026)
+
+On this experimental branch, `just rbuild` now publishes both no_std
+WASI-to-JVM JARs using the **minimal ProGuard keep** policy. The JVM
+integration tests run before publication, and the optimized cptx candidate
+also passes desktop failure, injected WASI I/O error and short-write checks.
+The published artifacts are under the Cargo workspace target directory in
+`wasm2jar-probe/{xcat,cptx}-standalone.jar`.
+
+| Policy | xcat JAR | cptx JAR | Total |
+| --- | ---: | ---: | ---: |
+| Conservative (previous default) | 25,540 B | 14,275 B | 39,815 B |
+| Relaxed | 24,371 B | 13,173 B | 37,544 B |
+| **Minimal (new default)** | **23,941 B** | **12,816 B** | **36,757 B** |
+
+These are local measurements, not guaranteed byte-identical builds.
+`just jvm-no-std-proguard-compare` rebuilds and tests all three policies
+without publishing; `just rbuild` builds and publishes the minimal policy.
+The known late-invalid-UTF-8 stdout streaming difference in no_std cptx
+remains; the tested desktop clipboard path rejects invalid input.
+
 ## Build
 
 The default `just` commands use the **pinned Rust Nightly
@@ -356,6 +377,13 @@ For example: `xcatj -d .`, `xcatj -e ./test.sh -- --verbose`,
 `xcatj -r script.py -- --verbose`, and `cptxj`.
 The JVM `xcatj` command now forwards `-d`, `-c`, `-e`, `-r` and `--` task
 arguments to the Java host (verified in the Linux end-to-end tests).
+For normal scans, `xcatj` now reports the number of files actually emitted by
+its no_std WASI scanner, matching the native `xcat` success-message format:
+`Copied N scanned files to clipboard.` The WASM module sends this count as
+separate host metadata; it is not appended to the clipboard contents. The JVM
+end-to-end test checks the count alongside the scan output. On the tested
+Linux project checkout, both commands reported 51 files. Matching counts do
+not by themselves establish byte-for-byte identical clipboard contents.
 `cptxj` automatically uses the JVM desktop mode; `cptxj --help`
 shows help without desktop capture. `xcatj` forwards all arguments.
 Set `CONSOLE_TOOLS_JAR_DIR` to the directory containing the two
@@ -655,6 +683,28 @@ MethodHandle bindings are not fully visible to static analysis. The partial
 WASI write harness recompiles a test-only host against the optimized runtime;
 it does **not** exercise the ProGuard-optimized host bytecode with injected
 short writes.
+
+### Verified minimal ProGuard JAR sizes (Linux)
+
+The no_std wasm2jar pipeline uses the verified `minimal` keep policy by
+default for both `xcat` and `cptx`. Run `just rbuild` to build, run the
+regression gates and publish both verified JARs. The file-count reporting
+change is included in the xcat JVM regression test.
+
+Latest verified local build (21 November 2026):
+
+| Artifact | Size |
+| --- | ---: |
+| Native xcat | 128,088 bytes |
+| Native cptx | 74,976 bytes |
+| JVM xcat | 24,793 bytes |
+| JVM cptx | 12,817 bytes |
+
+The JVM JARs are published to `wasm2jar-probe/xcat-standalone.jar` and
+`wasm2jar-probe/cptx-standalone.jar` under the Cargo target directory.
+Use `just jvm-no-std-proguard-compare` to compare conservative, relaxed and
+minimal keep policies without publishing the candidates. Size measurements
+are build-specific and can change after code or toolchain updates.
 
 ### Reproducibility diagnostics (non-blocking)
 

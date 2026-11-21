@@ -160,6 +160,13 @@ fn get_u64(bytes:&[u8])->u64{
 // One shared staging buffer prevents a 2 MB stack frame at every directory depth.
 // WASI Preview 1 execution is single-threaded in this launcher.
 static mut FILE_BUFFER:[u8;2_000_001]=[0;2_000_001];
+static mut FILE_COUNT:u32=0;
+fn report_count() {
+    let count=unsafe{FILE_COUNT};
+    let mut digits=[0u8;10];let mut n=count;let mut at=digits.len();
+    loop {at-=1;digits[at]=b'0'+(n%10) as u8;n/=10;if n==0{break}}
+    write(2,b"XCAT_FILES:");write(2,&digits[at..]);write(2,b"\n");
+}
 fn emit_file(file:u32, path:&[u8],cfg:&Config<'_>) {
     let contents=unsafe{core::slice::from_raw_parts_mut(core::ptr::addr_of_mut!(FILE_BUFFER).cast::<u8>(),2_000_001)};
     let mut total=0usize;
@@ -174,6 +181,7 @@ fn emit_file(file:u32, path:&[u8],cfg:&Config<'_>) {
     }
     unsafe{fd_close(file);}
     if ok&&total<=cfg.max&&!contents[..total].contains(&0)&&core::str::from_utf8(&contents[..total]).is_ok(){
+        unsafe{FILE_COUNT=FILE_COUNT.saturating_add(1);}
         write(1,b"===== ./");write(1,path);write(1,b" =====\n");
         write(1,&contents[..total]);
         if !contents[..total].ends_with(b"\n"){write(1,b"\n")}
@@ -301,4 +309,5 @@ pub extern "C" fn _start(){
     unsafe{fd_close(fd);}
     let cfg=config_from_json(&config_buf[..used]).unwrap_or_else(||fail(b"xcat: invalid config\n"));
     scan(3,b"",0,&cfg);
+    report_count();
 }

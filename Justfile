@@ -311,3 +311,11 @@ jvm-no-std-proguard: jvm-no-std-xcat-release-gate jvm-no-std-cptx
 # distributions. No publishing occurs if either test fails.
 jvm-no-std-proguard-publish: jvm-no-std-xcat-release-gate jvm-no-std-cptx
     python3 scripts/no_std_proguard.py --publish
+
+# Compare ProGuard keep policies for BOTH no_std JVM tools without publishing.
+# Every candidate runs JVM integration tests; cptx also runs WASI fault/short-write gates.
+jvm-no-std-proguard-compare: jvm-no-std-xcat-release-gate jvm-no-std-cptx
+    python3 scripts/no_std_proguard.py --keep-mode conservative --deep-verify
+    python3 scripts/no_std_proguard.py --keep-mode relaxed --deep-verify
+    python3 scripts/no_std_proguard.py --keep-mode minimal --deep-verify
+    python3 -c 'import glob,os; paths=glob.glob("{{cargo_target_dir}}/no-std-xcat/*-proguard-*.jar")+glob.glob("{{cargo_target_dir}}/wasm2jar-probe/*-proguard-*.jar"); print("ProGuard keep comparison (bytes):"); [(print(os.path.basename(p),os.path.getsize(p))) for p in sorted(paths)]'

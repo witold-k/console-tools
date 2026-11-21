@@ -171,6 +171,8 @@ def test_standalone(out, tool):
                                     cwd=folder, env=env, capture_output=True, text=True)
             if result.returncode:
                 raise RuntimeError(f"xcat JVM scan exit {result.returncode}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}")
+            if "Copied 2 scanned files to clipboard." not in result.stderr:
+                raise RuntimeError(f"xcat JVM scan file count mismatch: {result.stderr}")
             if not clipboard.exists():
                 raise RuntimeError("xcat JVM did not invoke clipboard")
             actual = clipboard.read_text(encoding="utf-8")
