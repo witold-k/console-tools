@@ -14,7 +14,15 @@ fn help_documents_all_modes() {
     let output = xcat(&["--help"]);
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    for expected in ["xcat -d <dir>", "xcat -e <file>", "--config", "Justfile", "Makefile", ".ps1"] {
+    for expected in [
+        "xcat -d <dir>",
+        "xcat -f <file>",
+        "xcat -e <file>",
+        "--config",
+        "Justfile",
+        "Makefile",
+        ".ps1",
+    ] {
         assert!(stdout.contains(expected), "help missing: {expected}");
     }
 }
@@ -28,8 +36,11 @@ fn unknown_argument_fails() {
 
 #[test]
 fn missing_option_values_fail() {
-    for args in [&["-d"][..], &["-e"][..], &["-c"][..]] {
-        assert!(!xcat(args).status.success(), "expected failure for {args:?}");
+    for args in [&["-d"][..], &["-e"][..], &["-f"][..], &["-c"][..]] {
+        assert!(
+            !xcat(args).status.success(),
+            "expected failure for {args:?}"
+        );
     }
 }
 
@@ -38,4 +49,19 @@ fn task_arguments_require_execute() {
     let output = xcat(&["--", "anything"]);
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("require -e"));
+}
+
+#[test]
+fn file_option_rejects_incompatible_modes() {
+    for args in [
+        &["-f", "README.md", "-e", "test.sh"][..],
+        &["-r", "test.sh", "-f", "README.md"][..],
+        &["-f", "a.txt", "-f", "b.txt"][..],
+        &["-f", "README.md", "--", "arg"][..],
+    ] {
+        assert!(
+            !xcat(args).status.success(),
+            "expected failure for {args:?}"
+        );
+    }
 }

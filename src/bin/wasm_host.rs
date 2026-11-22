@@ -4,7 +4,10 @@
 //! shared Rust modules. WASM performs scanning and output formatting.
 use console_tools::{clipboard, config::Config, runner, tmux, xcat_options};
 use std::{
-    env, error::Error, fs, io::{self, Write},
+    env,
+    error::Error,
+    fs,
+    io::{self, Write},
     path::{Path, PathBuf},
     process::{Command, ExitCode, Stdio},
     thread,
@@ -18,7 +21,8 @@ fn module_path(name: &str) -> PathBuf {
             let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
             // Cargo puts artifacts in the workspace root, not necessarily
             // in the package directory. Prefer the nearest existing module.
-            manifest.ancestors()
+            manifest
+                .ancestors()
                 .map(|dir| dir.join("target/wasm32-wasip1/release"))
                 .find(|dir| dir.join(format!("{name}.wasm")).is_file())
                 .unwrap_or_else(|| manifest.join("target/wasm32-wasip1/release"))
@@ -38,16 +42,24 @@ fn wasm_run(
     if !module.is_file() {
         return Err(format!("missing {}; run 'just build-wasm'", module.display()).into());
     }
-    let runner = env::var_os("CONSOLE_TOOLS_WASM_RUNNER")
-        .unwrap_or_else(|| "wasmtime".into());
+    let runner = env::var_os("CONSOLE_TOOLS_WASM_RUNNER").unwrap_or_else(|| "wasmtime".into());
     let mut command = Command::new(runner);
     command.arg("run");
     for (host, guest) in mounts {
-        command.arg("--dir").arg(format!("{}::{guest}", host.display()));
+        command
+            .arg("--dir")
+            .arg(format!("{}::{guest}", host.display()));
     }
-    command.arg(&module).args(args)
-        .stdout(Stdio::piped()).stderr(Stdio::inherit())
-        .stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() });
+    command
+        .arg(&module)
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .stdin(if input.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        });
     let mut child = command.spawn()?;
 
     // Drain stdout concurrently to avoid deadlocks with large tmux scrollback.
@@ -71,29 +83,40 @@ fn wasm_run(
 struct TempDirectory(PathBuf);
 impl TempDirectory {
     fn new() -> io::Result<Self> {
-        let nanos = SystemTime::now().duration_since(UNIX_EPOCH)
-            .map_err(io::Error::other)?.as_nanos();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(io::Error::other)?
+            .as_nanos();
         for suffix in 0..32u32 {
             let path = env::temp_dir().join(format!(
-                "console-tools-wasm-{}-{nanos}-{suffix}", std::process::id()));
+                "console-tools-wasm-{}-{nanos}-{suffix}",
+                std::process::id()
+            ));
             match fs::create_dir(&path) {
                 Ok(()) => return Ok(Self(path)),
                 Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
                 Err(e) => return Err(e),
             }
         }
-        Err(io::Error::new(io::ErrorKind::AlreadyExists, "temporary directory unavailable"))
+        Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "temporary directory unavailable",
+        ))
     }
 }
 impl Drop for TempDirectory {
-    fn drop(&mut self) { let _ = fs::remove_dir_all(&self.0); }
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
 }
 
 fn report(file: &Path, args: &[String], root: &Path) -> Result<(String, bool), Box<dyn Error>> {
     // Reuse the existing Rust launcher; no second interpreter selection logic.
     let output = runner::command(file, args, root)?.output()?;
     let success = output.status.success();
-    let status = output.status.code()
+    let status = output
+        .status
+        .code()
         .map_or_else(|| "terminated by signal".to_string(), |n| n.to_string());
     let temp = TempDirectory::new()?;
     fs::write(temp.0.join("stdout"), &output.stdout)?;
@@ -129,15 +152,23 @@ fn xcat(args: &[String]) -> Result<bool, Box<dyn Error>> {
         return Ok(true);
     }
     let root = opts.dir.canonicalize()?;
-    if !root.is_dir() { return Err(format!("Not a directory: {}", root.display()).into()); }
+    if !root.is_dir() {
+        return Err(format!("Not a directory: {}", root.display()).into());
+    }
     let task = if let Some(path) = opts.execute {
-        let path = if path.is_absolute() { path } else { root.join(path) };
+        let path = if path.is_absolute() {
+            path
+        } else {
+            root.join(path)
+        };
         let canonical = path.canonicalize()?;
         if !canonical.is_file() {
             return Err(format!("Not a task file: {}", canonical.display()).into());
         }
         Some(canonical)
-    } else { None };
+    } else {
+        None
+    };
 
     if opts.standalone {
         let task = task.ok_or("-r requires a file")?;
@@ -147,14 +178,55 @@ fn xcat(args: &[String]) -> Result<bool, Box<dyn Error>> {
         return Ok(success);
     }
 
-    let config = match opts.config { Some(path) => path, None => Config::default_path()? };
-    let config = if config.is_absolute() { config } else { env::current_dir()?.join(config) };
-    let config_parent = config.parent().ok_or("configuration has no parent directory")?;
+    let config = match opts.config {
+        Some(path) => path,
+        None => Config::default_path()?,
+    };
+    let config = if config.is_absolute() {
+        config
+    } else {
+        env::current_dir()?.join(config)
+    };
+    let config_parent = config
+        .parent()
+        .ok_or("configuration has no parent directory")?;
     fs::create_dir_all(config_parent)?;
     let config_name = config.file_name().ok_or("configuration has no filename")?;
-    let arguments = vec!["-d".to_string(), "/work".to_string(),
-        "-c".to_string(), format!("/cfg/{}", config_name.to_string_lossy())];
-    let scan = wasm_run("xcat", &arguments, &[(&root, "/work"), (config_parent, "/cfg")], None)?;
+    let mut arguments = vec![
+        "-d".to_string(),
+        "/work".to_string(),
+        "-c".to_string(),
+        format!("/cfg/{}", config_name.to_string_lossy()),
+    ];
+    // For single-file mode, preopen its parent as /work, including files outside -d.
+    let scan_root = if let Some(file) = opts.file {
+        let file = if file.is_absolute() {
+            file
+        } else {
+            root.join(file)
+        };
+        if !file.is_file() {
+            return Err(format!("Not a file: {}", file.display()).into());
+        }
+        let real = file.canonicalize()?;
+        let parent = real.parent().ok_or("file has no parent")?.to_path_buf();
+        arguments.push("-f".to_string());
+        arguments.push(
+            real.file_name()
+                .ok_or("file has no name")?
+                .to_string_lossy()
+                .into_owned(),
+        );
+        parent
+    } else {
+        root.clone()
+    };
+    let scan = wasm_run(
+        "xcat",
+        &arguments,
+        &[(&scan_root, "/work"), (config_parent, "/cfg")],
+        None,
+    )?;
     let mut text = String::from_utf8(scan)?;
     clipboard::copy(&text)?;
     eprintln!("Copied scanned project files to clipboard.");
@@ -164,7 +236,9 @@ fn xcat(args: &[String]) -> Result<bool, Box<dyn Error>> {
         Ok(value) => value,
         Err(err) => {
             text.push_str(&format!(
-                "\n===== EXECUTION ERROR: {} =====\n{err}\n", task.display()));
+                "\n===== EXECUTION ERROR: {} =====\n{err}\n",
+                task.display()
+            ));
             clipboard::copy(&text)?;
             return Err(err);
         }
@@ -190,6 +264,9 @@ fn main() -> ExitCode {
     match result {
         Ok(true) => ExitCode::SUCCESS,
         Ok(false) => ExitCode::FAILURE,
-        Err(err) => { eprintln!("{program}-wasm: {err}"); ExitCode::FAILURE }
+        Err(err) => {
+            eprintln!("{program}-wasm: {err}");
+            ExitCode::FAILURE
+        }
     }
 }

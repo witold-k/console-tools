@@ -3,13 +3,19 @@
 //! X11 clipboard owners may stay alive after their input has been written.
 
 #[cfg(not(target_os = "wasi"))]
-use std::{io::{self, Write}, process::{Command, Stdio}};
+use std::{
+    io::{self, Write},
+    process::{Command, Stdio},
+};
 
 /// Ordered clipboard commands, shared between native Rust and JVM/WASI.
 fn candidates() -> Vec<(&'static str, &'static [&'static str])> {
     let mut result = Vec::new();
     if std::env::var_os("WAYLAND_DISPLAY").is_some() {
-        result.push(("wl-copy", &["--type", "text/plain;charset=utf-8"] as &[&str]));
+        result.push((
+            "wl-copy",
+            &["--type", "text/plain;charset=utf-8"] as &[&str],
+        ));
     }
     if std::env::var_os("DISPLAY").is_some() {
         result.push(("xclip", &["-selection", "clipboard"]));
@@ -17,14 +23,16 @@ fn candidates() -> Vec<(&'static str, &'static [&'static str])> {
     }
     if result.is_empty() {
         result.extend([
-            ("wl-copy", &["--type", "text/plain;charset=utf-8"] as &[&str]),
+            (
+                "wl-copy",
+                &["--type", "text/plain;charset=utf-8"] as &[&str],
+            ),
             ("xclip", &["-selection", "clipboard"]),
             ("xsel", &["--clipboard", "--input"]),
         ]);
     }
     result
 }
-
 
 #[cfg(not(target_os = "wasi"))]
 fn copy_with(program: &str, args: &[&str], text: &str) -> io::Result<()> {
@@ -36,7 +44,11 @@ fn copy_with(program: &str, args: &[&str], text: &str) -> io::Result<()> {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()?;
-    let write_result = child.stdin.take().expect("piped stdin").write_all(text.as_bytes());
+    let write_result = child
+        .stdin
+        .take()
+        .expect("piped stdin")
+        .write_all(text.as_bytes());
     // Closing stdin is essential: clipboard tools read until EOF.
     if let Err(error) = write_result {
         let _ = child.kill();
@@ -49,8 +61,11 @@ fn copy_with(program: &str, args: &[&str], text: &str) -> io::Result<()> {
     // stderr/stdout are redirected to null so the daemon cannot keep a
     // captured pipe open (the original two-minute hang).
     let status = child.wait()?;
-    if status.success() { Ok(()) }
-    else { Err(io::Error::other(format!("{program} exited with {status}"))) }
+    if status.success() {
+        Ok(())
+    } else {
+        Err(io::Error::other(format!("{program} exited with {status}")))
+    }
 }
 
 /// Copy the complete payload in one operation. Supports Wayland, X11, Windows.
@@ -59,7 +74,11 @@ pub fn copy(text: &str) -> io::Result<()> {
     #[cfg(windows)]
     {
         let script = "[Console]::InputEncoding=[Text.UTF8Encoding]::new($false); $t=[Console]::In.ReadToEnd(); Set-Clipboard -Value $t";
-        return copy_with("powershell.exe", &["-NoProfile", "-NonInteractive", "-Command", script], text);
+        return copy_with(
+            "powershell.exe",
+            &["-NoProfile", "-NonInteractive", "-Command", script],
+            text,
+        );
     }
     #[cfg(not(windows))]
     {
@@ -70,11 +89,13 @@ pub fn copy(text: &str) -> io::Result<()> {
                 Err(e) => errors.push(format!("{program}: {e}")),
             }
         }
-        Err(io::Error::other(format!("Clipboard unavailable ({})", errors.join("; "))))
+        Err(io::Error::other(format!(
+            "Clipboard unavailable ({})",
+            errors.join("; ")
+        )))
     }
 }
 
- 
 /// WASI has no portable desktop clipboard. The std-only host bridge receives
 /// the complete payload from stdout and performs the actual clipboard operation.
 #[cfg(target_os = "wasi")]

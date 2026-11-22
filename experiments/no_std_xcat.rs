@@ -53,7 +53,7 @@ fn read(fd:u32, buf:&mut [u8])->Result<usize,()>{
     let mut n=0;
     if unsafe{fd_read(fd,&v,1,&mut n)}!=0 || n as usize>buf.len(){Err(())}else{Ok(n as usize)}
 }
-const HELP:&[u8]=b"xcat -- filtered project files and optional task output to clipboard\nUsage: xcat [-d dir] [-c config] [-e task|-r task] [-- task-arguments...]\n";
+const HELP:&[u8]=b"xcat -- filtered project files and optional task output to clipboard\nUsage: xcat [-d dir] [-f file] [-c config] [-e task|-r task] [-- task-arguments...]\n";
 const DEFAULT_CONFIG:&[u8]=b"{\n  \"scanendfilter\": [\".bb\", \".bbclass\", \".c\", \".cc\", \".cmake\", \".cpp\", \".cxx\", \".go\", \".h\", \".hh\", \".hpp\", \".hxx\", \".in\", \".ini\", \".java\", \".jl\", \".json\", \".lua\", \".md\", \".py\", \".rc\", \".rs\", \".sh\", \".ps1\", \".sv\", \".tcl\", \".tex\", \".toml\", \".txt\", \".xml\", \".log\", \".yaml\", \".yml\"],\n  \"scanfullfilter\": [\"CMakeLists.txt\", \"Cargo.toml\", \"meson.build\", \"pom.xml\", \"Makefile\", \"makefile\", \"Justfile\"],\n  \"excludedirs\": [\".git\", \".svn\", \".hg\", \"target\", \"build\", \"node_modules\", \".venv\", \"venv\"],\n  \"max_file_bytes\": 2000000\n}\n";
 fn eq_ignore_case(a:&[u8],b:&[u8])->bool{
     a.len()==b.len()&&a.iter().zip(b).all(|(x,y)|x.eq_ignore_ascii_case(y))
@@ -269,6 +269,7 @@ pub extern "C" fn _start(){
     }
     let mut i=1usize;
     let mut cfg:&[u8]=b"config.json";
+    let mut selected:Option<&[u8]>=None;
     while i<argc as usize{
         let ptr=argv[i];
         let offset=unsafe{ptr.offset_from(argbuf.as_ptr())};
@@ -277,7 +278,7 @@ pub extern "C" fn _start(){
         let end=arg.iter().position(|b|*b==0).unwrap_or(arg.len());
         let a=&arg[..end];
         if a==b"-h"||a==b"--help"{write(1,HELP);return}
-        if a==b"-d"||a==b"--dir"||a==b"-c"||a==b"--config"{
+        if a==b"-d"||a==b"--dir"||a==b"-c"||a==b"--config"||a==b"-f"||a==b"--file"{
             i+=1;if i>=argc as usize{fail(b"xcat: missing option value\n")}
             if a==b"-c"||a==b"--config"{
                 let ptr=argv[i];let offset=unsafe{ptr.offset_from(argbuf.as_ptr())};
@@ -285,6 +286,13 @@ pub extern "C" fn _start(){
                 let value=&argbuf[offset as usize..];
                 let end=value.iter().position(|b|*b==0).unwrap_or(value.len());
                 cfg=&value[..end];
+            }else if a==b"-f"||a==b"--file"{
+                if selected.is_some(){fail(b"xcat: multiple -f files\n")}
+                let ptr=argv[i];let offset=unsafe{ptr.offset_from(argbuf.as_ptr())};
+                if offset<0||offset as usize>=argbuf.len(){fail(b"xcat: invalid file pointer\n")}
+                let value=&argbuf[offset as usize..];
+                let end=value.iter().position(|b|*b==0).unwrap_or(value.len());
+                selected=Some(&value[..end]);
             }
         }else{fail(b"xcat: unsupported argument\n")}
         i+=1;
@@ -308,6 +316,15 @@ pub extern "C" fn _start(){
     }
     unsafe{fd_close(fd);}
     let cfg=config_from_json(&config_buf[..used]).unwrap_or_else(||fail(b"xcat: invalid config\n"));
-    scan(3,b"",0,&cfg);
+    if let Some(file)=selected {
+        // Explicit file names bypass suffix and excluded-directory filters.
+        // The host mounts the selected file's parent at fd 3.
+        let basename=file.rsplit(|b|*b==b'/').next().unwrap_or(file);
+        if basename.is_empty(){fail(b"xcat: invalid file path\n")}
+        let fd=open(3,file,false).unwrap_or_else(|_|fail(b"xcat: cannot open selected file\n"));
+        emit_file(fd,basename,&cfg);
+    }else{
+        scan(3,b"",0,&cfg);
+    }
     report_count();
 }

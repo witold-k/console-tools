@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Dependency-free JSON config for native and WASI builds.
-use std::{env, fs, io, path::{Path, PathBuf}};
+use std::{
+    env, fs, io,
+    path::{Path, PathBuf},
+};
 
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -13,17 +16,40 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            scanendfilter: [".bb", ".bbclass", ".c", ".cc", ".cmake", ".cpp", ".cxx", ".go",
-                ".h", ".hh", ".hpp", ".hxx", ".in", ".ini", ".java", ".jl", ".json",
-                ".lua", ".md", ".py", ".rc", ".rs", ".sh", ".ps1", ".sv", ".tcl",
-                ".tex", ".toml", ".txt", ".xml", ".log", ".yaml", ".yml"]
-                .into_iter().map(str::to_string).collect(),
-            scanfullfilter: ["CMakeLists.txt", "Cargo.toml", "meson.build",
-                "pom.xml", "Makefile", "makefile", "Justfile"]
-                .into_iter().map(str::to_string).collect(),
-            excludedirs: [".git", ".svn", ".hg", "target", "build",
-                "node_modules", ".venv", "venv"]
-                .into_iter().map(str::to_string).collect(),
+            scanendfilter: [
+                ".bb", ".bbclass", ".c", ".cc", ".cmake", ".cpp", ".cxx", ".go", ".h", ".hh",
+                ".hpp", ".hxx", ".in", ".ini", ".java", ".jl", ".json", ".lua", ".md", ".py",
+                ".rc", ".rs", ".sh", ".ps1", ".sv", ".tcl", ".tex", ".toml", ".txt", ".xml",
+                ".log", ".yaml", ".yml",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+            scanfullfilter: [
+                "CMakeLists.txt",
+                "Cargo.toml",
+                "meson.build",
+                "pom.xml",
+                "Makefile",
+                "makefile",
+                "Justfile",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+            excludedirs: [
+                ".git",
+                ".svn",
+                ".hg",
+                "target",
+                "build",
+                "node_modules",
+                ".venv",
+                "venv",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
             max_file_bytes: 2_000_000,
         }
     }
@@ -38,16 +64,28 @@ impl Config {
         if let Some(dir) = env::var_os("XDG_CONFIG_HOME").filter(|s| !s.is_empty()) {
             return Ok(PathBuf::from(dir).join("xcat").join("config.json"));
         }
-        let home = env::var_os("HOME").or_else(|| env::var_os("USERPROFILE"))
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "HOME/USERPROFILE is not set"))?;
-        Ok(PathBuf::from(home).join(".config").join("xcat").join("config.json"))
+        let home = env::var_os("HOME")
+            .or_else(|| env::var_os("USERPROFILE"))
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::NotFound, "HOME/USERPROFILE is not set")
+            })?;
+        Ok(PathBuf::from(home)
+            .join(".config")
+            .join("xcat")
+            .join("config.json"))
     }
 
     pub fn load_or_create(path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
         if !path.exists() {
-            if let Some(parent) = path.parent() { fs::create_dir_all(parent)?; }
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent)?;
+            }
             let text = Self::default().to_json();
-            match fs::OpenOptions::new().write(true).create_new(true).open(path) {
+            match fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(path)
+            {
                 Ok(mut f) => {
                     use std::io::Write;
                     f.write_all(text.as_bytes())?;
@@ -58,12 +96,18 @@ impl Config {
             }
         }
         let data = fs::read_to_string(path)?;
-        let config = Self::from_json(&data)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        if config.scanendfilter.iter().any(|s| s.is_empty() || !s.starts_with('.')) {
+        let config =
+            Self::from_json(&data).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        if config
+            .scanendfilter
+            .iter()
+            .any(|s| s.is_empty() || !s.starts_with('.'))
+        {
             return Err("scanendfilter entries must start with a dot".into());
         }
-        if config.max_file_bytes == 0 { return Err("max_file_bytes must be positive".into()); }
+        if config.max_file_bytes == 0 {
+            return Err("max_file_bytes must be positive".into());
+        }
         Ok(config)
     }
 
@@ -87,9 +131,13 @@ impl Config {
         fn arr(v: &[String]) -> String {
             v.iter().map(|s| esc(s)).collect::<Vec<_>>().join(", ")
         }
-        format!("{{\n  \"scanendfilter\": [{}],\n  \"scanfullfilter\": [{}],\n  \"excludedirs\": [{}],\n  \"max_file_bytes\": {}\n}}\n",
-            arr(&self.scanendfilter), arr(&self.scanfullfilter),
-            arr(&self.excludedirs), self.max_file_bytes)
+        format!(
+            "{{\n  \"scanendfilter\": [{}],\n  \"scanfullfilter\": [{}],\n  \"excludedirs\": [{}],\n  \"max_file_bytes\": {}\n}}\n",
+            arr(&self.scanendfilter),
+            arr(&self.scanfullfilter),
+            arr(&self.excludedirs),
+            self.max_file_bytes
+        )
     }
 
     pub fn from_json(text: &str) -> Result<Self, String> {
@@ -107,34 +155,55 @@ impl Config {
                     "max_file_bytes" => result.max_file_bytes = j.integer()?,
                     _ => j.skip_value(0)?,
                 }
-                if j.consume('}') { break; }
+                if j.consume('}') {
+                    break;
+                }
                 j.expect(',')?;
             }
         }
         j.space();
-        if j.pos != j.text.len() { return Err("trailing JSON data".into()); }
+        if j.pos != j.text.len() {
+            return Err("trailing JSON data".into());
+        }
         Ok(result)
     }
 
     pub fn accepts(&self, path: &Path) -> bool {
-        let Some(name) = path.file_name().and_then(|n| n.to_str()) else { return false; };
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            return false;
+        };
         let name = name.to_lowercase();
-        self.scanfullfilter.iter().any(|full| name == full.to_lowercase())
-            || self.scanendfilter.iter().any(|ending| name.ends_with(&ending.to_lowercase()))
+        self.scanfullfilter
+            .iter()
+            .any(|full| name == full.to_lowercase())
+            || self
+                .scanendfilter
+                .iter()
+                .any(|ending| name.ends_with(&ending.to_lowercase()))
     }
 
     pub fn is_excluded(&self, relative: &Path) -> bool {
         relative.components().any(|c| {
             let part = c.as_os_str().to_string_lossy();
-            self.excludedirs.iter().any(|excluded| part.eq_ignore_ascii_case(excluded))
+            self.excludedirs
+                .iter()
+                .any(|excluded| part.eq_ignore_ascii_case(excluded))
         })
     }
 }
 
-struct Json<'a> { text: &'a str, pos: usize }
+struct Json<'a> {
+    text: &'a str,
+    pos: usize,
+}
 impl Json<'_> {
     fn space(&mut self) {
-        while self.text.as_bytes().get(self.pos).is_some_and(u8::is_ascii_whitespace) {
+        while self
+            .text
+            .as_bytes()
+            .get(self.pos)
+            .is_some_and(u8::is_ascii_whitespace)
+        {
             self.pos += 1;
         }
     }
@@ -145,17 +214,28 @@ impl Json<'_> {
     }
     fn consume(&mut self, c: char) -> bool {
         self.space();
-        if self.text[self.pos..].starts_with(c) { self.pos += c.len_utf8(); true }
-        else { false }
+        if self.text[self.pos..].starts_with(c) {
+            self.pos += c.len_utf8();
+            true
+        } else {
+            false
+        }
     }
     fn expect(&mut self, c: char) -> Result<(), String> {
-        if self.consume(c) { Ok(()) } else { Err(format!("expected '{c}' at byte {}", self.pos)) }
+        if self.consume(c) {
+            Ok(())
+        } else {
+            Err(format!("expected '{c}' at byte {}", self.pos))
+        }
     }
     fn hex4(&mut self) -> Result<u32, String> {
         let mut code = 0;
         for _ in 0..4 {
-            code = (code << 4) + self.next().and_then(|c| c.to_digit(16))
-                .ok_or("invalid JSON unicode escape")?;
+            code = (code << 4)
+                + self
+                    .next()
+                    .and_then(|c| c.to_digit(16))
+                    .ok_or("invalid JSON unicode escape")?;
         }
         Ok(code)
     }
@@ -166,9 +246,14 @@ impl Json<'_> {
             match self.next().ok_or("unterminated JSON string")? {
                 '"' => return Ok(out),
                 '\\' => match self.next().ok_or("incomplete JSON escape")? {
-                    '"' => out.push('"'), '\\' => out.push('\\'), '/' => out.push('/'),
-                    'b' => out.push('\u{0008}'), 'f' => out.push('\u{000c}'),
-                    'n' => out.push('\n'), 'r' => out.push('\r'), 't' => out.push('\t'),
+                    '"' => out.push('"'),
+                    '\\' => out.push('\\'),
+                    '/' => out.push('/'),
+                    'b' => out.push('\u{0008}'),
+                    'f' => out.push('\u{000c}'),
+                    'n' => out.push('\n'),
+                    'r' => out.push('\r'),
+                    't' => out.push('\t'),
                     'u' => {
                         let mut n = self.hex4()?;
                         if (0xd800..=0xdbff).contains(&n) {
@@ -193,7 +278,14 @@ impl Json<'_> {
     fn integer(&mut self) -> Result<u64, String> {
         self.space();
         let start = self.pos;
-        while self.text.as_bytes().get(self.pos).is_some_and(u8::is_ascii_digit) { self.pos += 1; }
+        while self
+            .text
+            .as_bytes()
+            .get(self.pos)
+            .is_some_and(u8::is_ascii_digit)
+        {
+            self.pos += 1;
+        }
         let s = &self.text[start..self.pos];
         if s.is_empty() || (s.len() > 1 && s.starts_with('0')) {
             return Err("expected unsigned JSON integer".into());
@@ -203,18 +295,26 @@ impl Json<'_> {
     fn string_array(&mut self) -> Result<Vec<String>, String> {
         self.expect('[')?;
         let mut items = Vec::new();
-        if self.consume(']') { return Ok(items); }
+        if self.consume(']') {
+            return Ok(items);
+        }
         loop {
             items.push(self.string()?);
-            if self.consume(']') { return Ok(items); }
+            if self.consume(']') {
+                return Ok(items);
+            }
             self.expect(',')?;
         }
     }
     fn skip_value(&mut self, depth: u32) -> Result<(), String> {
-        if depth > 64 { return Err("JSON nesting exceeds limit".into()); }
+        if depth > 64 {
+            return Err("JSON nesting exceeds limit".into());
+        }
         self.space();
         match self.text.as_bytes().get(self.pos).copied() {
-            Some(b'"') => { self.string()?; }
+            Some(b'"') => {
+                self.string()?;
+            }
             Some(b'{') => {
                 self.expect('{')?;
                 if !self.consume('}') {
@@ -222,7 +322,9 @@ impl Json<'_> {
                         self.string()?;
                         self.expect(':')?;
                         self.skip_value(depth + 1)?;
-                        if self.consume('}') { break; }
+                        if self.consume('}') {
+                            break;
+                        }
                         self.expect(',')?;
                     }
                 }
@@ -232,25 +334,39 @@ impl Json<'_> {
                 if !self.consume(']') {
                     loop {
                         self.skip_value(depth + 1)?;
-                        if self.consume(']') { break; }
+                        if self.consume(']') {
+                            break;
+                        }
                         self.expect(',')?;
                     }
                 }
             }
             Some(b't') | Some(b'f') | Some(b'n') => {
-                let word = if self.text[self.pos..].starts_with("true") { "true" }
-                    else if self.text[self.pos..].starts_with("false") { "false" }
-                    else { "null" };
-                if !self.text[self.pos..].starts_with(word) { return Err("invalid JSON literal".into()); }
+                let word = if self.text[self.pos..].starts_with("true") {
+                    "true"
+                } else if self.text[self.pos..].starts_with("false") {
+                    "false"
+                } else {
+                    "null"
+                };
+                if !self.text[self.pos..].starts_with(word) {
+                    return Err("invalid JSON literal".into());
+                }
                 self.pos += word.len();
             }
             Some(b'-' | b'0'..=b'9') => {
                 let start = self.pos;
-                while self.text.as_bytes().get(self.pos).is_some_and(|b|
-                    matches!(*b, b'-' | b'+' | b'.' | b'e' | b'E' | b'0'..=b'9')) {
+                while self
+                    .text
+                    .as_bytes()
+                    .get(self.pos)
+                    .is_some_and(|b| matches!(*b, b'-' | b'+' | b'.' | b'e' | b'E' | b'0'..=b'9'))
+                {
                     self.pos += 1;
                 }
-                if self.text[start..self.pos].is_empty() { return Err("invalid JSON number".into()); }
+                if self.text[start..self.pos].is_empty() {
+                    return Err("invalid JSON number".into());
+                }
             }
             _ => return Err("invalid JSON value".into()),
         }
@@ -276,7 +392,8 @@ mod tests {
     }
     #[test]
     fn accepts_unicode_escapes_and_unknown_fields() {
-        let c = Config::from_json(r#"{"scanendfilter":[".\u0072s"],"other":{"a":[false,null]}}"#).unwrap();
+        let c = Config::from_json(r#"{"scanendfilter":[".\u0072s"],"other":{"a":[false,null]}}"#)
+            .unwrap();
         assert!(c.scanendfilter.contains(&".rs".to_string()));
     }
 }

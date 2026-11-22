@@ -3,7 +3,12 @@
 #![cfg(unix)]
 
 use console_tools::{config::Config, scan};
-use std::{fs, os::unix::fs::symlink, path::PathBuf, sync::atomic::{AtomicU64, Ordering}};
+use std::{
+    fs,
+    os::unix::fs::symlink,
+    path::PathBuf,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -11,7 +16,8 @@ struct Temp(PathBuf);
 impl Temp {
     fn new() -> Self {
         let dir = std::env::temp_dir().join(format!(
-            "xcat-symlinks-{}-{}", std::process::id(),
+            "xcat-symlinks-{}-{}",
+            std::process::id(),
             NEXT_ID.fetch_add(1, Ordering::Relaxed)
         ));
         fs::create_dir(&dir).unwrap();
@@ -19,7 +25,9 @@ impl Temp {
     }
 }
 impl Drop for Temp {
-    fn drop(&mut self) { let _ = fs::remove_dir_all(&self.0); }
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
 }
 
 #[test]

@@ -84,6 +84,8 @@ The command does not print the captured pane or modify tmux history.
 | --- | --- |
 | `xcat` | Scan the current working directory and copy selected files |
 | `xcat -d /path/to/project` | Scan a specific directory |
+| `xcat -f README.md` | Copy one file, even if its extension is not configured |
+| `xcat -d project -f src/main.rs` | Copy only the specified file within `project` |
 | `xcat -r script.py -- --verbose` | Run only the task, auto-select launcher, copy its output |
 | `xcat -e ./test.sh -- --verbose` | Scan, copy, execute a shell script, then copy scan + output |
 | `xcat -d project -e Justfile -- build` | Scan `project`, run its Justfile's `build` recipe |
@@ -93,6 +95,10 @@ The command does not print the captured pane or modify tmux history.
 | `xcat -h` | Display detailed help |
 
 `-d` / `--dir` selects the scan directory (default: current directory).
+`-f` / `--file` selects exactly one file, resolved relative to `-d` unless absolute.
+Explicit files bypass filename and directory filters, but still obey the configured
+maximum size and UTF-8/text validation. `-f` cannot be combined with `-e` or `-r`.
+The native, WASI host and JVM launchers support this option.
 `-e` / `--execute` selects a task file, resolved relative to the scan
 directory unless absolute. `-c` / `--config` overrides the config location.
 Everything after `--` is passed unchanged to the task, without shell

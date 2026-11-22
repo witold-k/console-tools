@@ -7,12 +7,14 @@ const HELP: &str = r#"xcat — filtered project files and optional task output t
 Usage:
   xcat
   xcat -d <dir>
+  xcat -f <file> [-d <dir>]
   xcat -e <file> [-d <dir>] [-- task-arguments...]
   xcat -r <file> [-d <dir>] [-- task-arguments...]
   xcat -h | --help
 
 Options:
   -d, --dir <dir>        Directory to scan (default current directory)
+  -f, --file <file>      Copy one file (relative to -d; bypass name filters)
   -e, --execute <file>   Task to execute after the initial clipboard copy
   -r, --run <file>       Run a file standalone; copy its output only
   -c, --config <file>    Override JSON config path
@@ -21,6 +23,8 @@ Options:
 Examples:
   xcat
   xcat -d src
+  xcat -f README.md
+  xcat -d project -f src/main.rs
   xcat -e ./test.sh -- --verbose
   xcat -d project -e Justfile -- build
   xcat -e Makefile -- test
@@ -38,14 +42,20 @@ Copies scan results first, then scan results plus task stdout and stderr.
 
 fn run_task(file: &Path, args: &[String], root: &Path) -> Result<(String, bool), Box<dyn Error>> {
     let output = runner::command(file, args, root)?.output()?;
-    let status = output.status.code().map_or_else(|| "terminated by signal".to_string(), |code| code.to_string());
+    let status = output.status.code().map_or_else(
+        || "terminated by signal".to_string(),
+        |code| code.to_string(),
+    );
     let content = task_report::format_task_output(file, &output.stdout, &output.stderr, &status);
     Ok((content, output.status.success()))
 }
 
 fn run() -> Result<bool, Box<dyn Error>> {
     let opts = xcat_options::parse(env::args().skip(1))?;
-    if opts.help { print!("{HELP}"); return Ok(true); }
+    if opts.help {
+        print!("{HELP}");
+        return Ok(true);
+    }
     #[cfg(target_os = "wasi")]
     if opts.execute.is_some() {
         return Err("WASI cannot launch tasks: use wasm-host xcat ...".into());
@@ -56,9 +66,15 @@ fn run() -> Result<bool, Box<dyn Error>> {
     }
     let task = match opts.execute {
         Some(path) => {
-            let path = if path.is_absolute() { path } else { root.join(path) };
+            let path = if path.is_absolute() {
+                path
+            } else {
+                root.join(path)
+            };
             let canonical = fs::canonicalize(&path)?;
-            if !canonical.is_file() { return Err(format!("Not a task file: {}", canonical.display()).into()); }
+            if !canonical.is_file() {
+                return Err(format!("Not a task file: {}", canonical.display()).into());
+            }
             Some(canonical)
         }
         None => None,
@@ -71,20 +87,36 @@ fn run() -> Result<bool, Box<dyn Error>> {
         return Ok(success);
     }
     let config_file = match opts.config {
-        Some(path) => path, None => Config::default_path()?,
+        Some(path) => path,
+        None => Config::default_path()?,
     };
     let config = Config::load_or_create(&config_file)?;
-    let (mut text, files) = scan::collect(&root, &config)?;
+    let (mut text, files) = match opts.file {
+        Some(file) => {
+            let file = if file.is_absolute() {
+                file
+            } else {
+                root.join(file)
+            };
+            scan::collect_file(&file, &config)?
+        }
+        None => scan::collect(&root, &config)?,
+    };
     clipboard::copy(&text)?;
     eprintln!("Copied {files} scanned files to clipboard.");
-    let Some(task) = task else { return Ok(true); };
+    let Some(task) = task else {
+        return Ok(true);
+    };
     let (output, success) = match run_task(&task, &opts.forwarded, &root) {
         Ok(value) => value,
         Err(err) => {
-            text.push_str(&format!("
+            text.push_str(&format!(
+                "
 ===== EXECUTION ERROR: {} =====
 {err}
-", task.display()));
+",
+                task.display()
+            ));
             clipboard::copy(&text)?;
             return Err(err);
         }
@@ -100,12 +132,16 @@ fn run() -> Result<bool, Box<dyn Error>> {
 #[cfg(target_os = "wasi")]
 fn wasm_report(args: &[String]) -> Result<(), Box<dyn Error>> {
     if args.len() != 5 {
-        return Err("usage: xcat --wasm-task-report <task> <stdout-file> <stderr-file> <status>".into());
+        return Err(
+            "usage: xcat --wasm-task-report <task> <stdout-file> <stderr-file> <status>".into(),
+        );
     }
     let stdout = fs::read(&args[2])?;
     let stderr = fs::read(&args[3])?;
-    print!("{}", task_report::format_task_output(
-        Path::new(&args[1]), &stdout, &stderr, &args[4]));
+    print!(
+        "{}",
+        task_report::format_task_output(Path::new(&args[1]), &stdout, &stderr, &args[4])
+    );
     Ok(())
 }
 
@@ -116,7 +152,10 @@ fn main() -> ExitCode {
         if args.first().is_some_and(|a| a == "--wasm-task-report") {
             return match wasm_report(&args) {
                 Ok(()) => ExitCode::SUCCESS,
-                Err(err) => { eprintln!("xcat: {err}"); ExitCode::FAILURE }
+                Err(err) => {
+                    eprintln!("xcat: {err}");
+                    ExitCode::FAILURE
+                }
             };
         }
     }
@@ -124,6 +163,9 @@ fn main() -> ExitCode {
     match run() {
         Ok(true) => ExitCode::SUCCESS,
         Ok(false) => ExitCode::FAILURE,
-        Err(err) => { eprintln!("xcat: {err}"); ExitCode::FAILURE }
+        Err(err) => {
+            eprintln!("xcat: {err}");
+            ExitCode::FAILURE
+        }
     }
 }

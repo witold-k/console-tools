@@ -21,7 +21,11 @@ fn excludes_nested_directories_but_not_similar_names() {
 
 #[test]
 fn creates_missing_config_and_preserves_existing_changes() {
-    let dir = std::env::temp_dir().join(format!("xcat-test-{}-{:?}", std::process::id(), std::thread::current().id()));
+    let dir = std::env::temp_dir().join(format!(
+        "xcat-test-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
     fs::create_dir_all(&dir).unwrap();
     let path = dir.join("config.json");
     let _ = fs::remove_file(&path);

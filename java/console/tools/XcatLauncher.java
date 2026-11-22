@@ -388,6 +388,7 @@ public final class XcatLauncher {
         Path root=Paths.get("").toAbsolutePath().normalize();
         Path config;
         Path task;
+        Path file;
         boolean standalone;
         boolean help;
         List<String> forwarded=new ArrayList<>();
@@ -399,21 +400,30 @@ public final class XcatLauncher {
             if(a.equals("-h")||a.equals("--help")){o.help=true;return o;}
             if(a.equals("--")){o.forwarded.addAll(Arrays.asList(args).subList(i+1,args.length));break;}
             if(a.equals("-d")||a.equals("--dir")||a.equals("-c")||a.equals("--config")
-                ||a.equals("-e")||a.equals("--execute")||a.equals("-r")||a.equals("--run")){
+                ||a.equals("-e")||a.equals("--execute")||a.equals("-r")||a.equals("--run")
+                ||a.equals("-f")||a.equals("--file")){
                 if(++i>=args.length)throw new IOException(a+" requires a value");
                 String value=args[i];
                 if(a.equals("-d")||a.equals("--dir"))o.root=Paths.get(value).toAbsolutePath().normalize();
                 else if(a.equals("-c")||a.equals("--config"))o.config=Paths.get(value).toAbsolutePath().normalize();
-                else {
+                else if(a.equals("-f")||a.equals("--file")){
+                    if(o.file!=null)throw new IOException("Only one -f file may be supplied");
+                    o.file=Paths.get(value);
+                }else {
                     if(o.task!=null)throw new IOException("Only one of -e and -r may be supplied");
                     o.task=Paths.get(value);
                     o.standalone=a.equals("-r")||a.equals("--run");
                 }
             }else throw new IOException("Unknown argument: "+a);
         }
+        if(o.file!=null&&o.task!=null)throw new IOException("-f cannot be combined with -e or -r");
         if(o.task==null&&!o.forwarded.isEmpty())throw new IOException("-- arguments require -e or -r");
         o.root=o.root.toRealPath();
         if(!Files.isDirectory(o.root))throw new IOException("Not a directory: "+o.root);
+        if(o.file!=null){
+            o.file=(o.file.isAbsolute()?o.file:o.root.resolve(o.file)).toRealPath();
+            if(!Files.isRegularFile(o.file))throw new IOException("Not a file: "+o.file);
+        }
         if(o.task!=null){
             o.task=(o.task.isAbsolute()?o.task:o.root.resolve(o.task)).toRealPath();
             if(!Files.isRegularFile(o.task))throw new IOException("Not a task file: "+o.task);
@@ -437,8 +447,13 @@ public final class XcatLauncher {
         final int files;
         ScanResult(byte[] contents,int files){this.contents=contents;this.files=files;}
     }
-    private static ScanResult runScan(Path root,Path cfg) throws Exception {
-        XcatLauncher host=new XcatLauncher(new String[]{"-d",".","-c","/cfg/"+cfg.getFileName()},root,cfg.getParent(),null);
+    private static ScanResult runScan(Path root,Path cfg,Path file) throws Exception {
+        // A selected file may live outside the project root; mount its parent.
+        Path scanRoot=file==null?root:file.getParent();
+        String[] scanArgs=file==null
+            ?new String[]{"-d",".","-c","/cfg/"+cfg.getFileName()}
+            :new String[]{"-d",".","-c","/cfg/"+cfg.getFileName(),"-f",file.getFileName().toString()};
+        XcatLauncher host=new XcatLauncher(scanArgs,scanRoot,cfg.getParent(),null);
         int status=host.execute();
         String metadata=host.diagnostics.toString(StandardCharsets.UTF_8);
         if(status!=0){System.err.print(metadata);throw new IOException("xcat WASM exited "+status);}
@@ -514,7 +529,7 @@ public final class XcatLauncher {
             byte[] scan=new byte[0];
             if(!o.standalone){
                 Files.createDirectories(o.config.getParent());
-                ScanResult result=runScan(o.root,o.config);
+                ScanResult result=runScan(o.root,o.config,o.file);
                 scan=result.contents;
                 copyToClipboard(scan);
                 System.err.println("Copied "+result.files+" scanned files to clipboard.");

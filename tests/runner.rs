@@ -1,10 +1,20 @@
 // SPDX-License-Identifier: Apache-2.0
 use console_tools::runner;
-use std::{fs, path::PathBuf, time::{SystemTime, UNIX_EPOCH}};
+use std::{
+    fs,
+    path::PathBuf,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 fn fixture(extension: &str, contents: &[u8]) -> PathBuf {
-    let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-    let path = std::env::temp_dir().join(format!("console-tools-runner-{}-{stamp}.{extension}", std::process::id()));
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!(
+        "console-tools-runner-{}-{stamp}.{extension}",
+        std::process::id()
+    ));
     fs::write(&path, contents).unwrap();
     path
 }
