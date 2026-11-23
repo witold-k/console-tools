@@ -2,43 +2,7 @@
 use console_tools::{clipboard, config::Config, runner, scan, task_report, xcat_options};
 use std::{env, error::Error, fs, path::Path, process::ExitCode};
 
-const HELP: &str = r#"xcat — filtered project files and optional task output to clipboard
-
-Usage:
-  xcat
-  xcat -d <dir>
-  xcat -f <file> [-d <dir>]
-  xcat -e <file> [-d <dir>] [-- task-arguments...]
-  xcat -r <file> [-d <dir>] [-- task-arguments...]
-  xcat -h | --help
-
-Options:
-  -d, --dir <dir>        Directory to scan (default current directory)
-  -f, --file <file>      Copy one file (relative to -d; bypass name filters)
-  -e, --execute <file>   Task to execute after the initial clipboard copy
-  -r, --run <file>       Run a file standalone; copy its output only
-  -c, --config <file>    Override JSON config path
-  --                    Pass subsequent arguments unchanged to task
-
-Examples:
-  xcat
-  xcat -d src
-  xcat -f README.md
-  xcat -d project -f src/main.rs
-  xcat -e ./test.sh -- --verbose
-  xcat -d project -e Justfile -- build
-  xcat -e Makefile -- test
-  xcat -e script.ps1 -- -Verbose
-  xcat -r script.py -- --verbose
-
-Config: XDG_CONFIG_HOME/xcat/config.json or ~/.config/xcat/config.json,
-        on Windows APPDATA/xcat/config.json. Automatically created on first use.
-Uses aiagents-compatible scanendfilter and scanfullfilter JSON fields.
-
-Execution: Justfile => just --justfile, Makefile => make -f,
-           .sh => bash, .ps1 => PowerShell, others => directly.
-Copies scan results first, then scan results plus task stdout and stderr.
-"#;
+const HELP: &str = include_str!("../cli/xcat_help.txt");
 
 fn run_task(file: &Path, args: &[String], root: &Path) -> Result<(String, bool), Box<dyn Error>> {
     let output = runner::command(file, args, root)?.output()?;

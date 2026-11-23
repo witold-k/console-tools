@@ -41,7 +41,7 @@ fn read(fd:u32, buf:&mut [u8])->Result<usize,()>{
     let mut n=0;
     if unsafe{fd_read(fd,&v,1,&mut n)}!=0 || n as usize>buf.len(){Err(())}else{Ok(n as usize)}
 }
-const HELP:&[u8]=b"xcat -- filtered project files and optional task output to clipboard\nUsage: xcat [-d dir] [-f file] [-c config] [-e task|-r task] [-- task-arguments...]\n";
+const HELP: &[u8] = include_bytes!("../src/cli/xcat_help.txt");
 const DEFAULT_CONFIG:&[u8]=b"{\n  \"scanendfilter\": [\".bb\", \".bbclass\", \".c\", \".cc\", \".cmake\", \".cpp\", \".cxx\", \".go\", \".h\", \".hh\", \".hpp\", \".hxx\", \".in\", \".ini\", \".java\", \".jl\", \".json\", \".lua\", \".md\", \".py\", \".rc\", \".rs\", \".sh\", \".ps1\", \".sv\", \".tcl\", \".tex\", \".toml\", \".txt\", \".xml\", \".log\", \".yaml\", \".yml\"],\n  \"scanfullfilter\": [\"CMakeLists.txt\", \"Cargo.toml\", \"meson.build\", \"pom.xml\", \"Makefile\", \"makefile\", \"Justfile\"],\n  \"excludedirs\": [\".git\", \".svn\", \".hg\", \"target\", \"build\", \"node_modules\", \".venv\", \"venv\"],\n  \"max_file_bytes\": 2000000\n}\n";
 fn eq_ignore_case(a:&[u8],b:&[u8])->bool{
     a.len()==b.len()&&a.iter().zip(b).all(|(x,y)|x.eq_ignore_ascii_case(y))
