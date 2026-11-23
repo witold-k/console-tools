@@ -4,20 +4,8 @@
 #![no_main]
 use core::panic::PanicInfo;
 
-// LLVM may lower slice comparisons to libc memcmp even in a no_std build.
-// Provide the symbol locally so wasm2jar does not require an env.memcmp import.
-// Volatile reads prevent LLVM from folding this implementation back into memcmp.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn memcmp(a:*const u8,b:*const u8,n:usize)->i32 {
-    let mut i=0;
-    while i<n {
-        let x=unsafe{core::ptr::read_volatile(a.add(i))};
-        let y=unsafe{core::ptr::read_volatile(b.add(i))};
-        if x!=y{return x as i32-y as i32}
-        i+=1;
-    }
-    0
-}
+#[path = "../src/no_std_runtime.rs"]
+mod no_std_runtime;
 
 #[panic_handler] fn panic(_: &PanicInfo) -> ! { loop {} }
 #[repr(C)] struct Iovec { buf: *mut u8, len: u32 }

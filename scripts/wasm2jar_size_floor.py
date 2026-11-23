@@ -17,9 +17,9 @@ import zipfile
 from cptx_size_floor import FIXTURES, ROOT, TARGET, wasm_code_size
 
 
-def run(argv: list[str]) -> None:
+def run(argv: list[str], *, cwd: Path = ROOT) -> None:
     print("+", " ".join(map(str, argv)), flush=True)
-    subprocess.run(argv, cwd=ROOT, check=True)
+    subprocess.run(argv, cwd=cwd, check=True)
 
 
 def target_dir() -> Path:
@@ -76,7 +76,7 @@ def main() -> None:
                         wasm = optimized
             jar = tmp / f"{name}.jar"
             run([converter, "--output-class", "console/tools/Cptx",
-                 "--jar", str(jar), str(wasm)])
+                 "--jar", str(jar), str(wasm)], cwd=tmp)
             translated, support, raw, count = class_sizes(jar)
             rows.append((name, wasm.stat().st_size, wasm_code_size(wasm),
                          jar.stat().st_size, translated, support, raw, count))

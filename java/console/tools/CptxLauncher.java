@@ -148,9 +148,9 @@ public final class CptxLauncher {
         Map<String, Object> wasi = new HashMap<>();
         for (String name : new String[] {
                 "args_sizes_get", "args_get", "environ_sizes_get", "environ_get",
-                "fd_read", "fd_write", "proc_exit" }) {
+                "fd_read", "fd_write", "proc_exit", "cptx_command", "cptx_cwd" }) {
             int arity = name.equals("proc_exit") ? 1
-                : (name.equals("fd_read") || name.equals("fd_write") ? 4 : 2);
+                : (name.equals("fd_read") || name.equals("fd_write") || name.equals("cptx_command") ? 4 : 2);
             Class<?>[] parameters = new Class<?>[arity];
             Arrays.fill(parameters, int.class);
             Class<?> result = name.equals("proc_exit") ? void.class : int.class;
@@ -266,16 +266,62 @@ public final class CptxLauncher {
         runClipboardCommands(commands, data);
     }
 
+    /** Generic OS adapters; VCS policy and CLI parsing are exclusively Rust. */
+    public int cptx_command(int argsPtr, int argsLen, int outPtr, int capacity) {
+        try {
+            ByteBuffer m = mem();
+            check(m, unsigned(argsPtr), unsigned(argsLen));
+            check(m, unsigned(outPtr), unsigned(capacity));
+            if (argsLen <= 0 || argsLen > 512 || capacity > 8192) return -1;
+            byte[] raw = new byte[argsLen];
+            m.position(argsPtr); m.get(raw);
+            if (raw[raw.length - 1] != 0) return -1;
+            List<String> command = new ArrayList<>();
+            int start = 0;
+            for (int i = 0; i < raw.length; i++) {
+                if (raw[i] == 0) {
+                    if (i == start) return -1;
+                    command.add(new String(raw, start, i - start, StandardCharsets.UTF_8));
+                    start = i + 1;
+                }
+            }
+            if (command.isEmpty()) return -1;
+            byte[] result = commandOutput(command.toArray(String[]::new));
+            if (result.length > capacity) return -1;
+            m.position(outPtr); m.put(result);
+            return result.length;
+        } catch (Exception ex) { return -1; }
+    }
+
+    public int cptx_cwd(int outPtr, int capacity) {
+        try {
+            ByteBuffer m = mem();
+            byte[] result = System.getProperty("user.dir").getBytes(StandardCharsets.UTF_8);
+            check(m, unsigned(outPtr), unsigned(capacity));
+            if (result.length > capacity) return -1;
+            m.position(outPtr); m.put(result);
+            return result.length;
+        } catch (Exception ex) { return -1; }
+    }
+
+    private static byte[] desktopInput(String[] args) throws Exception {
+        if (args.length == 0 || args.length == 1 &&
+                (args[0].equals("-b") || args[0].equals("--buffer")))
+            return commandOutput("tmux", "capture-pane", "-p", "-S", "-");
+        // For path/VCS modes Rust requests host operations via WASI imports.
+        return new byte[0];
+    }
+
     /** Desktop mode: tmux -> original Rust WASM logic -> OS clipboard. */
-    private static void desktop() throws Exception {
-        byte[] pane = commandOutput("tmux", "capture-pane", "-p", "-S", "-");
+    private static void desktop(String[] args) throws Exception {
+        byte[] pane = desktopInput(args);
         InputStream originalIn = System.in;
         PrintStream originalOut = System.out;
         ByteArrayOutputStream output = new ByteArrayOutputStream();
         try {
             System.setIn(new ByteArrayInputStream(pane));
             System.setOut(new PrintStream(output, true, StandardCharsets.UTF_8));
-            int status = new CptxLauncher(new String[0], true).execute();
+            int status = new CptxLauncher(args, true).execute();
             if (status != 0) throw new IOException("Rust WASM cptx exited " + status);
         } finally {
             System.setIn(originalIn);
@@ -302,7 +348,13 @@ public final class CptxLauncher {
 
     public static void main(String[] args) {
         try {
-            if (args.length == 1 && "--desktop".equals(args[0])) { desktop(); return; }
+            if (args.length >= 1 && "--desktop".equals(args[0])) {
+                desktop(Arrays.copyOfRange(args, 1, args.length)); return;
+            }
+            if (args.length >= 1 && (args[0].equals("-p") || args[0].equals("--path")
+                    || args[0].equals("-v") || args[0].equals("--version"))) {
+                desktop(args); return;
+            }
             int status = new CptxLauncher(args).execute();
             if (status != 0) System.exit(status);
         } catch (Throwable error) {

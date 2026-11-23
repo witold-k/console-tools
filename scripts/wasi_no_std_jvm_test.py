@@ -28,7 +28,7 @@ def temporary_dir(prefix):
 
 def run(argv: list[str], **kwargs) -> subprocess.CompletedProcess:
     print("+", " ".join(map(str, argv)), flush=True)
-    return subprocess.run(argv, cwd=ROOT, check=True, **kwargs)
+    return subprocess.run(argv, cwd=kwargs.pop("cwd", ROOT), check=True, **kwargs)
 
 
 def test_desktop_failures(jar: Path) -> None:
@@ -58,6 +58,31 @@ def test_desktop_failures(jar: Path) -> None:
             marker.unlink(missing_ok=True)
             return subprocess.run([java_executable, "-jar", str(jar), "--desktop"],
                                   cwd=ROOT, env=env, capture_output=True, timeout=60)
+        # Check the published JAR's real CLI modes with a mock clipboard.
+        with temporary_dir("cptx-jvm-modes-") as work:
+            checkout = Path(work)
+            subprocess.run(["git", "init", "-q", str(checkout)], check=True)
+            subprocess.run(["git", "-C", str(checkout), "remote", "add", "origin",
+                            "https://example.org/default.git"], check=True)
+            subprocess.run(["git", "-C", str(checkout), "remote", "add", "upstream",
+                            "ssh://example.org/other.git"], check=True)
+            for arguments, expected in (
+                (["-p"], str(checkout)),
+                (["--path"], str(checkout)),
+                (["-v"], "https://example.org/default.git"),
+                (["--version", "upstream"], "ssh://example.org/other.git"),
+            ):
+                output = checkout / "clipboard.txt"
+                output.unlink(missing_ok=True)
+                mock_env = dict(env)
+                mock_env["CPTX_JVM_TEST_OUTPUT"] = str(output)
+                clipboard.write_text('#!/bin/sh\ncat > "$CPTX_JVM_TEST_OUTPUT"\n')
+                result = subprocess.run([java_executable, "-jar", str(jar), *arguments],
+                                        cwd=checkout, env=mock_env, capture_output=True, timeout=60)
+                assert result.returncode == 0, (arguments, result.stderr)
+                assert output.read_text() == expected, (arguments, output.read_text())
+                print(f"PASS JVM clipboard mode {arguments}")
+            clipboard.write_text('#!/bin/sh\ntouch "$MOCK_CLIPBOARD_MARKER"\nexit "${MOCK_CLIPBOARD_EXIT:-0}"\n')
         tmux.write_text('#!/bin/sh\nexit 23\n')
         tmux.chmod(0o755)
         result = invoke()
@@ -206,8 +231,9 @@ def main() -> None:
     compare_native = args.compare_native
     with temporary_dir("no-std-jvm-e2e-") as directory:
         tmp = Path(directory)
-        source = tmp / "stream.rs"
-        source.write_text(NO_STD[variant], encoding="utf-8")
+        source = ROOT / "experiments/no_std_cptx.rs" if variant == "no_std_cptx" else tmp / "stream.rs"
+        if variant != "no_std_cptx":
+            source.write_text(NO_STD[variant], encoding="utf-8")
         wasm = tmp / "stream.wasm"
         optimized = tmp / "stream.opt.wasm"
         translated = tmp / "stream-translated.jar"
@@ -246,7 +272,7 @@ def main() -> None:
         print(f"Selected WASM: {'raw' if use_raw else 'size-optimized'} "
               f"({module.stat().st_size:,} bytes)", flush=True)
         run(["wasm2jar", "--output-class", "console/tools/Cptx",
-             "--jar", str(translated), str(module)])
+             "--jar", str(translated), str(module)], cwd=tmp)
         stage = tmp / "stage"
         stage.mkdir()
         with zipfile.ZipFile(translated) as archive:
@@ -296,10 +322,16 @@ def main() -> None:
                 result = run(["java", "-jar", str(standalone), option],
                              capture_output=True, timeout=60)
                 expected_help = (
-                    "cptx — copy the current tmux pane and its scrollback to the clipboard\n\n"
-                    "Usage: cptx [-h|--help]\n\n"
-                    "Requires tmux and a supported clipboard backend "
-                    "(xclip, xsel, or wl-copy).\n"
+                    "cptx — copy text to the desktop clipboard\n\n"
+                    "Usage: cptx [OPTION] [REMOTE]\n\n"
+                    "Options:\n"
+                    "  -b, --buffer           Copy the current tmux pane and scrollback (default)\n"
+                    "  -p, --path             Copy the absolute current working directory\n"
+                    "  -v, --version [REMOTE] Copy the version-control remote URL (default: origin)\n"
+                    "  -h, --help             Show this help\n\n"
+                    "Supported version-control systems: Git, Subversion (SVN), Mercurial (hg), Pijul.\n"
+                    "Requires a supported clipboard backend (xclip, xsel, or wl-copy).\n"
+                    "Buffer mode also requires tmux.\n"
                 ).encode("utf-8")
                 assert result.stdout == expected_help and result.stderr == b"", (
                     option, result.stdout, result.stderr)
@@ -308,9 +340,18 @@ def main() -> None:
                 arguments = [option, "extra"] if option != "--unknown" else [option]
                 result = subprocess.run(["java", "-jar", str(standalone), *arguments],
                                         cwd=ROOT, capture_output=True, timeout=60)
-                assert result.returncode == 1 and result.stderr == b"cptx: Usage: cptx [-h|--help]\n", (
+                assert result.returncode == 1 and result.stderr == b"cptx: Usage: cptx [-b|--buffer|-p|--path|-v|--version [REMOTE]|-h|--help]\n", (
                     arguments, result.returncode, result.stderr)
                 print(f"PASS rejected CLI {arguments}")
+            for option in ("-b", "--buffer"):
+                result = subprocess.run(["java", "-jar", str(standalone), option],
+                                        cwd=ROOT, input=b"shared parser buffer\n",
+                                        capture_output=True, timeout=60)
+                assert result.returncode == 0 and result.stdout == b"shared parser buffer\n", (
+                    option, result.returncode, result.stdout, result.stderr)
+                print(f"PASS CLI {option}")
+            # The desktop launcher must use the Rust parser and host adapters
+            # for path and VCS; integration tests below exercise clipboard output.
             invalid_cases = {"invalid_utf8": bytes((0xff, 0xfe)),
                                "large_invalid_binary": bytes(range(256)) * 2048,
                                "incomplete_utf8": bytes((0xf0, 0x9f)),

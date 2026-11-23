@@ -6,6 +6,24 @@ single clipboard text, optionally runs a task, and copies the combined source
 and task output back to the clipboard. It is based on
 [buildscripts/lua/bin/xcat.lua](https://github.com/witold-k/buildscripts/blob/master/lua/bin/xcat.lua).
 
+### cptx clipboard modes
+
+```sh
+cptx                  # copy the current tmux pane and scrollback
+cptx -b               # same as above (--buffer)
+cptx -p               # copy the absolute working directory (--path)
+cptx -v               # copy the VCS remote URL (--version; default remote: origin)
+cptx -v upstream      # copy a named remote URL
+cptx --help           # show command-line help without copying
+```
+
+`--version` selects a repository remote URL (it does **not** print the cptx
+program version). Supported systems: Git (`git remote get-url`), Subversion
+(`svn info --show-item url`), Mercurial (`hg paths`; `origin` maps to
+`default`), and Pijul (configured remotes). SVN has a single checkout URL,
+so it does not accept a named remote. Commands report an error instead of
+replacing the clipboard if the remote cannot be found.
+
 ## Verified no_std JVM ProGuard release (21 November 2026)
 
 On this experimental branch, `just rbuild` now publishes both no_std

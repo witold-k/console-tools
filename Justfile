@@ -291,7 +291,7 @@ jvm-no-std-xcat-prototype:
 # Deliberately isolated; only publish after all existing xcat tests pass.
 jvm-no-std-xcat-test: jvm-no-std-xcat-prototype
     mkdir -p "{{cargo_target_dir}}/no-std-xcat"
-    wasm2jar --output-class console/tools/Xcat --jar "{{cargo_target_dir}}/no-std-xcat/xcat-translated.jar" "{{cargo_target_dir}}/no-std-xcat/xcat.opt.wasm"
+    cd "{{cargo_target_dir}}/no-std-xcat" && wasm2jar --output-class console/tools/Xcat --jar "{{cargo_target_dir}}/no-std-xcat/xcat-translated.jar" "{{cargo_target_dir}}/no-std-xcat/xcat.opt.wasm"
     python3 scripts/wasm2jar_run.py --tool xcat --input-jar "{{cargo_target_dir}}/no-std-xcat/xcat-translated.jar" --output-jar "{{cargo_target_dir}}/no-std-xcat/xcat-no-std-standalone.jar"
     python3 -c 'from pathlib import Path; p=Path("{{cargo_target_dir}}/no-std-xcat/xcat-no-std-standalone.jar"); print(f"Experimental no_std xcat JAR: {p.stat().st_size:,} bytes")'
 

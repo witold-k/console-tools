@@ -54,6 +54,8 @@ def optimize(tool, baseline, output, keep_mode="minimal", deep_verify=False):
         "    public int environ_get(int,int);",
         "    public int fd_read(int,int,int,int);",
         "    public int fd_write(int,int,int,int);",
+        "    public int cptx_command(int,int,int,int);",
+        "    public int cptx_cwd(int,int);",
         "    public void proc_exit(int);",
         "    public int random_get(int,int);",
         "    public int fd_close(int);",

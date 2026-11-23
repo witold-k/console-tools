@@ -1,21 +1,28 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Capture the entire current tmux pane history into the desktop clipboard.
-use console_tools::{clipboard, tmux};
-use std::{env, error::Error, process::ExitCode};
-
-const HELP: &str = "cptx — copy the current tmux pane and its scrollback to the clipboard\n\nUsage: cptx [-h|--help]\n\nRequires tmux and a supported clipboard backend (xclip, xsel, or wl-copy).\n";
+//! Copy tmux scrollback, the working directory, or a VCS remote to the clipboard.
+use console_tools::{clipboard, tmux, vcs};
+#[path = "../cli/cptx.rs"]
+mod cptx_cli;
+use cptx_cli::{parse_args, Mode, HELP};
+use std::{
+    env,
+    error::Error,
+    process::ExitCode,
+};
 
 fn run() -> Result<(), Box<dyn Error>> {
-    let mut args = env::args_os().skip(1);
-    match (args.next().as_deref(), args.next()) {
-        (None, None) => {}
-        (Some(arg), None) if arg == "-h" || arg == "--help" => {
+    let raw_args = env::args_os().skip(1).collect::<Vec<_>>();
+    let args = raw_args.iter().map(|arg| arg.to_str().ok_or("Arguments must be UTF-8")).collect::<Result<Vec<_>, _>>()?;
+    let mode = parse_args(&args)?;
+    let text = match mode {
+        Mode::Help => {
             print!("{HELP}");
             return Ok(());
         }
-        _ => return Err("Usage: cptx [-h|--help]".into()),
-    }
-    let text = tmux::capture()?;
+        Mode::Buffer => tmux::capture()?,
+        Mode::Path => env::current_dir()?.to_string_lossy().into_owned(),
+        Mode::Version(remote) => vcs::remote_url(remote)?,
+    };
     clipboard::copy(&text)?;
     Ok(())
 }
@@ -29,3 +36,4 @@ fn main() -> ExitCode {
         }
     }
 }
+

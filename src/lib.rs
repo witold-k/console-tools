@@ -9,3 +9,5 @@ pub mod task_report;
 
 pub mod tmux;
 pub mod xcat_options;
+
+pub mod vcs;

@@ -14,11 +14,11 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def run(argv, timeout=45):
+def run(argv, timeout=45, cwd=None):
     print("+", " ".join(map(str, argv)), flush=True)
     try:
         result = subprocess.run(argv, text=True, stdout=subprocess.PIPE,
-                                stderr=subprocess.STDOUT, timeout=timeout,
+                                stderr=subprocess.STDOUT, timeout=timeout, cwd=cwd,
                                 check=False)
     except (OSError, subprocess.TimeoutExpired) as exc:
         print(f"ERROR: {exc}")
@@ -90,7 +90,7 @@ def main():
     out = output_dir / f"{args.tool}.jar"
     argv = [compiler] + [v.replace("{wasm}", str(module)).replace("{out}", str(out))
                          for v in extra]
-    result = run(argv, timeout=120)
+    result = run(argv, timeout=120, cwd=output_dir.resolve())
     if result is None or result.returncode:
         return 1
     if out.is_file():
