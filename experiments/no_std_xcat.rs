@@ -4,6 +4,9 @@
 #![no_main]
 use core::panic::PanicInfo;
 
+#[path = "../src/cli/xcat_filter.rs"]
+mod xcat_filter;
+
 #[path = "../src/no_std_runtime.rs"]
 mod no_std_runtime;
 
@@ -43,12 +46,6 @@ fn read(fd:u32, buf:&mut [u8])->Result<usize,()>{
 }
 const HELP: &[u8] = include_bytes!("../src/cli/xcat_help.txt");
 const DEFAULT_CONFIG:&[u8]=b"{\n  \"scanendfilter\": [\".bb\", \".bbclass\", \".c\", \".cc\", \".cmake\", \".cpp\", \".cxx\", \".go\", \".h\", \".hh\", \".hpp\", \".hxx\", \".in\", \".ini\", \".java\", \".jl\", \".json\", \".lua\", \".md\", \".py\", \".rc\", \".rs\", \".sh\", \".ps1\", \".sv\", \".tcl\", \".tex\", \".toml\", \".txt\", \".xml\", \".log\", \".yaml\", \".yml\"],\n  \"scanfullfilter\": [\"CMakeLists.txt\", \"Cargo.toml\", \"meson.build\", \"pom.xml\", \"Makefile\", \"makefile\", \"Justfile\"],\n  \"excludedirs\": [\".git\", \".svn\", \".hg\", \"target\", \"build\", \"node_modules\", \".venv\", \"venv\"],\n  \"max_file_bytes\": 2000000\n}\n";
-fn eq_ignore_case(a:&[u8],b:&[u8])->bool{
-    a.len()==b.len()&&a.iter().zip(b).all(|(x,y)|x.eq_ignore_ascii_case(y))
-}
-fn ends_ignore_case(a:&[u8],b:&[u8])->bool{
-    a.len()>=b.len()&&eq_ignore_case(&a[a.len()-b.len()..],b)
-}
 // Configuration is held as UTF-8 JSON in a fixed buffer. A compact parser
 // reads the three string arrays and the unsigned size limit without allocation.
 struct Config<'a> {
@@ -110,7 +107,7 @@ fn array_contains(json:&[u8],name:&[u8],suffix:bool)->bool{
         if json.get(i)==Some(&b']'){return false}
         let Some(end)=string_end(json,i) else{return false};
         let entry=&json[i+1..end-1];
-        if if suffix{ends_ignore_case(name,entry)}else{eq_ignore_case(name,entry)}{return true}
+        if if suffix{xcat_filter::ends_ignore_ascii_case(name,entry)}else{xcat_filter::eq_ignore_ascii_case(name,entry)}{return true}
         i=space(json,end);
         if json.get(i)!=Some(&b','){return false}
         i+=1;

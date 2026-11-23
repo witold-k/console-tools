@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Dependency-free JSON config for native and WASI builds.
+#[path = "cli/xcat_filter.rs"]
+mod xcat_filter;
+
 use std::{
     env, fs, io,
     path::{Path, PathBuf},
@@ -172,6 +175,18 @@ impl Config {
         let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
             return false;
         };
+        // Keep Unicode case folding for non-ASCII filenames, while sharing
+        // the ASCII matching policy with the no_std JVM implementation.
+        if name.is_ascii()
+            && self.scanfullfilter.iter().all(|s| s.is_ascii())
+            && self.scanendfilter.iter().all(|s| s.is_ascii())
+        {
+            return xcat_filter::accepts(
+                name.as_bytes(),
+                self.scanfullfilter.iter().map(|s| s.as_bytes()),
+                self.scanendfilter.iter().map(|s| s.as_bytes()),
+            );
+        }
         let name = name.to_lowercase();
         self.scanfullfilter
             .iter()
