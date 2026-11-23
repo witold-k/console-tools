@@ -14,7 +14,7 @@ import subprocess
 import tempfile
 import zipfile
 
-from cptx_size_floor import FIXTURES, ROOT, TARGET, wasm_code_size
+from cptx_size_floor import FIXTURES, ROOT, TARGET, wasm_code_size, target_dir
 
 SETTINGS = {
     "baseline_z_fat": ("z", "fat", "1"),
@@ -50,7 +50,8 @@ def main() -> None:
     if not rustc or not optimizer or (not args.no_jvm and not converter):
         parser.error("requires rustc and wasm-opt, plus wasm2jar unless --no-jvm")
     results = []
-    with tempfile.TemporaryDirectory(prefix="wasi-runtime-floor-") as directory:
+    target_dir().mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="wasi-runtime-floor-", dir=target_dir()) as directory:
         temp = Path(directory)
         for source_name in SOURCES:
             source = temp / f"{source_name}.rs"

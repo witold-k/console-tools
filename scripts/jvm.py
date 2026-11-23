@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """JVM packaging and ProGuard helpers invoked by the Justfile."""
 import argparse
+import json
 import os
 from pathlib import Path
 import shutil
@@ -11,10 +12,19 @@ import re
 import zipfile
 
 ROOT = Path(__file__).resolve().parent.parent
-DIST = ROOT / "target/jvm-dist"
-PACKAGE = ROOT / "target/jvm-package/release"
+
+def cargo_target_dir():
+    metadata = subprocess.run(
+        ["cargo", "metadata", "--no-deps", "--format-version", "1"],
+        cwd=ROOT, check=True, capture_output=True, text=True,
+    )
+    return Path(json.loads(metadata.stdout)["target_directory"])
+
+TARGET_DIR = cargo_target_dir()
+DIST = TARGET_DIR / "jvm-dist"
+PACKAGE = TARGET_DIR / "jvm-package" / "release"
 PROGUARD_VERSION = "7.10.0"
-PROGUARD_DIR = ROOT / "target/tools" / f"proguard-{PROGUARD_VERSION}"
+PROGUARD_DIR = TARGET_DIR / "tools" / f"proguard-{PROGUARD_VERSION}"
 
 
 def run(*args, env=None):
@@ -27,40 +37,36 @@ def runtime_path():
 
 
 def target_dir():
-    base = Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local/share")))
-    (base / "cargo-jvm/rustc_codegen_jvm/target/release").mkdir(parents=True, exist_ok=True)
+    """Report Cargo's effective target directory without creating anything."""
+    print(TARGET_DIR)
 
 
 def cargo_jvm(*args):
     env = os.environ.copy()
-    env["CARGO_TARGET_DIR"] = "target"
+    env["CARGO_TARGET_DIR"] = str(TARGET_DIR)
     env["RUSTFLAGS"] = "-C panic=abort"
     run("cargo", "jvm", *args, env=env)
 
 
 def setup():
-    target_dir()
     run("cargo", "install", "cargo-jvm")
     env = os.environ.copy()
-    env["CARGO_TARGET_DIR"] = "target"
+    env["CARGO_TARGET_DIR"] = str(TARGET_DIR)
     run("cargo", "jvm", "setup", env=env)
     run("cargo", "jvm", "doctor", env=env)
 
 
 def build():
-    target_dir()
     for name in ("xcat", "cptx"):
         cargo_jvm("build", "--bin", name)
 
 
 def package():
-    target_dir()
     for name in ("xcat", "cptx"):
         cargo_jvm("package", "--release", "--bin", name)
 
 
 def smoke():
-    target_dir()
     cargo_jvm("run", "--bin", "xcat", "--", "--help")
 
 
@@ -109,6 +115,9 @@ def distributions():
         raise FileNotFoundError(f"Missing JVM runtime: {runtime}")
     thin_dir = DIST / "thin"
     standalone_dir = DIST / "standalone"
+    for name in ("xcat", "cptx"):
+        if not (PACKAGE / f"{name}.jar").is_file():
+            raise FileNotFoundError(f"Missing JVM package: {PACKAGE / f'{name}.jar'}")
     thin_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy2(runtime, thin_dir / "runtime-0.1.0.jar")
     with zipfile.ZipFile(runtime) as runtime_jar:
@@ -183,7 +192,6 @@ def proguard():
     if not jmods:
         raise RuntimeError("No JDK jmods found")
     output_dir = DIST / "proguard"
-    output_dir.mkdir(parents=True, exist_ok=True)
     for name in ("xcat", "cptx"):
         source = DIST / "standalone" / f"{name}.jar"
         output = output_dir / f"{name}.jar"
@@ -206,9 +214,10 @@ def proguard():
             f"-keep class {name}.{name} {{ public static void main(java.lang.String[]); }}",
             "-keep class org.rustlang.** { *; }",
         ]
+        output_dir.mkdir(parents=True, exist_ok=True)
         # Never leave a stale or partially generated artifact on failure.
         output.unlink(missing_ok=True)
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(prefix="proguard-", dir=TARGET_DIR) as tmp:
             config = Path(tmp) / "proguard.pro"
             config.write_text("\n".join(rules) + "\n")
             run(executable, f"@{config}")
@@ -261,11 +270,11 @@ def report_optimized():
         path = DIST / "proguard" / f"{name}.jar"
         if not path.is_file():
             raise FileNotFoundError(f"Missing optimized JAR: {path}")
-        print(f"  {path.relative_to(ROOT)}: {path.stat().st_size / 1048576:.2f} MiB")
+        print(f"  {path.relative_to(TARGET_DIR)}: {path.stat().st_size / 1048576:.2f} MiB")
 
 
 def artifacts():
-    for folder, suffix in ((ROOT / "target/jvm-package", ".jar"), (ROOT / "target/jvm-unknown-jvm", ".class")):
+    for folder, suffix in ((TARGET_DIR / "jvm-package", ".jar"), (TARGET_DIR / "jvm-unknown-jvm", ".class")):
         if folder.is_dir():
             for path in sorted(folder.rglob(f"*{suffix}")):
                 print(path)

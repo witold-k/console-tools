@@ -10,6 +10,14 @@ import sys
 import tempfile
 import zipfile
 
+
+def temporary_dir(prefix):
+    metadata = subprocess.run(["cargo", "metadata", "--no-deps", "--format-version", "1"],
+                              cwd=ROOT, check=True, capture_output=True, text=True)
+    target = Path(json.loads(metadata.stdout)["target_directory"])
+    target.mkdir(parents=True, exist_ok=True)
+    return tempfile.TemporaryDirectory(prefix=prefix, dir=target)
+
 ROOT = Path(__file__).resolve().parents[1]
 
 def run(args, **kwargs):
@@ -121,7 +129,7 @@ def main():
 
 
 def package_standalone(original, out, tool):
-    with tempfile.TemporaryDirectory(prefix=f"{tool}-jvm-") as d:
+    with temporary_dir(prefix=f"{tool}-jvm-") as d:
         stage = Path(d)
         with zipfile.ZipFile(original) as archive:
             for item in archive.infolist():
@@ -152,7 +160,7 @@ def test_standalone(out, tool):
     if tool not in result.stdout:
         raise RuntimeError(f"{tool} JVM --help smoke test failed")
     if tool == "xcat":
-        with tempfile.TemporaryDirectory(prefix="xcat-jvm-e2e-") as d:
+        with temporary_dir(prefix="xcat-jvm-e2e-") as d:
             folder = Path(d)
             (folder / "hello.md").write_text("JVM_SCAN_UNIQUE_äöü\n", encoding="utf-8")
             (folder / "ignore.bin").write_bytes(b"\x00\xff")
@@ -238,7 +246,7 @@ def test_standalone(out, tool):
     result = run(["java", "-jar", str(out)], input=sample, capture_output=True)
     if result.stdout != sample:
         raise RuntimeError(f"stdin roundtrip failed: {result.stdout!r}")
-    with tempfile.TemporaryDirectory(prefix="cptx-jvm-e2e-") as d:
+    with temporary_dir(prefix="cptx-jvm-e2e-") as d:
         folder = Path(d)
         bin_dir = folder / "bin"
         bin_dir.mkdir()

@@ -25,6 +25,12 @@ def target_dir() -> Path:
 OUT = target_dir() / TARGET / "release"
 
 
+def temporary_dir(prefix):
+    target = target_dir()
+    target.mkdir(parents=True, exist_ok=True)
+    return tempfile.TemporaryDirectory(prefix=prefix, dir=target)
+
+
 def run(args: list[str], **kwargs) -> subprocess.CompletedProcess:
     print("+", " ".join(map(str, args)), flush=True)
     return subprocess.run(args, cwd=ROOT, check=True, **kwargs)
@@ -240,7 +246,7 @@ def test() -> None:
     text = b"Unicode: \xc3\xa4\xc3\xb6\xc3\xbc\n"
     capture = wasmtime("cptx", [], input_data=text)
     assert capture.stdout == text, (capture.stdout, text)
-    with tempfile.TemporaryDirectory(prefix="console-tools-wasm-") as d:
+    with temporary_dir("console-tools-wasm-") as d:
         temp = Path(d)
         root = temp / "project"
         root.mkdir()
@@ -276,7 +282,7 @@ def test() -> None:
         assert "EXIT STATUS: 0" in report, report
     # Real WASI modules + real Rust host, with mocked external OS commands.
     if os.name == "posix":
-        with tempfile.TemporaryDirectory(prefix="console-tools-wasm-e2e-") as d:
+        with temporary_dir("console-tools-wasm-e2e-") as d:
             temp = Path(d)
             bin_dir = temp / "bin"
             root = temp / "work"

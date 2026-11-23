@@ -82,7 +82,8 @@ def main() -> None:
         raise RuntimeError("rustc not found")
     optimizer = shutil.which("wasm-opt")
     rows: list[tuple[str, int, int]] = []
-    with tempfile.TemporaryDirectory(prefix="cptx-size-floor-") as d:
+    target_dir().mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="cptx-size-floor-", dir=target_dir()) as d:
         tmp = Path(d)
         for name, code in FIXTURES.items():
             source = tmp / f"{name}.rs"

@@ -29,7 +29,12 @@ def main():
         if action == "cover":
             command.append("--html")
         elif action == "cover-lcov":
-            command += ["--lcov", "--output-path", str(ROOT / "target/coverage/lcov.info")]
+            metadata = subprocess.check_output(
+                ["cargo", "metadata", "--no-deps", "--format-version", "1"],
+                cwd=ROOT, text=True,
+            )
+            target = Path(json.loads(metadata)["target_directory"])
+            command += ["--lcov", "--output-path", str(target / "coverage/lcov.info")]
         run(*command)
     elif action == "install":
         # Install the already verified pinned-Nightly binaries; cargo install would
@@ -37,11 +42,11 @@ def main():
         metadata = subprocess.check_output(["cargo", "metadata", "--no-deps", "--format-version", "1"], cwd=ROOT, text=True)
         target = Path(json.loads(metadata)["target_directory"])
         bindir = Path(os.environ.get("CARGO_INSTALL_ROOT", os.environ.get("CARGO_HOME", str(Path.home() / ".cargo")))) / "bin"
-        bindir.mkdir(parents=True, exist_ok=True)
         sources = {name: target / "release" / name for name in ("xcat", "cptx", "wasm-host")}
         missing = [str(source) for source in sources.values() if not source.is_file()]
         if missing:
             raise RuntimeError(f"Missing release binaries: {missing}; run just build-release first")
+        bindir.mkdir(parents=True, exist_ok=True)
         for name, source in sources.items():
             shutil.copy2(source, bindir / name)
             (bindir / name).chmod(0o755)

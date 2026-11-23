@@ -200,7 +200,8 @@ def main() -> None:
     if not all((rustc, optimizer, converter)):
         raise RuntimeError("rustc, wasm-opt and wasm2jar are required")
     rows = []
-    with tempfile.TemporaryDirectory(prefix="wasi-no-std-floor-") as directory:
+    target_dir().mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="wasi-no-std-floor-", dir=target_dir()) as directory:
         tmp = Path(directory)
         for name, source_text in {**STD, **NO_STD}.items():
             source = tmp / f"{name}.rs"

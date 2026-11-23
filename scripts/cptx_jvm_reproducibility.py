@@ -11,6 +11,8 @@ import subprocess
 import sys
 import shutil
 import tempfile
+
+from cptx_size_floor import target_dir
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -26,7 +28,8 @@ def entries(path: Path) -> dict[str, bytes]:
 
 
 def main() -> None:
-    with tempfile.TemporaryDirectory(prefix="cptx-jvm-repro-") as directory:
+    target_dir().mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="cptx-jvm-repro-", dir=target_dir()) as directory:
         jars = [Path(directory) / f"build-{i}.jar" for i in (1, 2)]
         for jar in jars:
             subprocess.run([sys.executable, "scripts/wasi_no_std_jvm_test.py",

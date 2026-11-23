@@ -15,9 +15,15 @@ import argparse
 import sys
 import zipfile
 
-from cptx_size_floor import ROOT, TARGET
+from cptx_size_floor import ROOT, TARGET, target_dir
 from wasi_no_std_floor import NO_STD
 from wasm2jar_run import fix_wasm2jar_assertion_error, test_standalone
+
+
+def temporary_dir(prefix):
+    target = target_dir()
+    target.mkdir(parents=True, exist_ok=True)
+    return tempfile.TemporaryDirectory(prefix=prefix, dir=target)
 
 
 def run(argv: list[str], **kwargs) -> subprocess.CompletedProcess:
@@ -27,7 +33,7 @@ def run(argv: list[str], **kwargs) -> subprocess.CompletedProcess:
 
 def test_desktop_failures(jar: Path) -> None:
     """Desktop errors must never launch the clipboard after failed capture/validation."""
-    with tempfile.TemporaryDirectory(prefix="no-std-desktop-errors-") as directory:
+    with temporary_dir("no-std-desktop-errors-") as directory:
         root = Path(directory)
         bin_dir = root / "bin"
         bin_dir.mkdir()
@@ -130,7 +136,7 @@ def test_partial_wasi_writes(stage: Path) -> None:
     needle = "long length = unsigned(m.getInt((int) (base + i * 8L + 4)));"
     assert method.count(needle) == 1, "fd_write host implementation changed"
     patched = method.replace(needle, needle + "\n                length = Math.min(length, 7);")
-    with tempfile.TemporaryDirectory(prefix="no-std-partial-write-") as directory:
+    with temporary_dir("no-std-partial-write-") as directory:
         override = Path(directory)
         source = override / "console/tools/CptxLauncher.java"
         source.parent.mkdir(parents=True)
@@ -198,7 +204,7 @@ def main() -> None:
     variant = args.variant
     use_raw = args.raw_wasm
     compare_native = args.compare_native
-    with tempfile.TemporaryDirectory(prefix="no-std-jvm-e2e-") as directory:
+    with temporary_dir("no-std-jvm-e2e-") as directory:
         tmp = Path(directory)
         source = tmp / "stream.rs"
         source.write_text(NO_STD[variant], encoding="utf-8")

@@ -112,7 +112,7 @@ build-wasmi:
 
 # Test with the embedded Wasmi runner instead of an installed Wasmtime CLI.
 test-wasmi: build-wasmi build-wasm
-    CONSOLE_TOOLS_WASM_RUNNER="{{justfile_directory()}}/experiments/wasmi-runner/target/release/console-tools-wasmi-runner" python3 scripts/wasm.py test
+    CONSOLE_TOOLS_WASM_RUNNER="{{cargo_target_dir}}/release/console-tools-wasmi-runner" python3 scripts/wasm.py test
 
 # Run real WASI smoke tests for scanning, tmux stdin, and task reporting.
 test-wasm: build-wasm

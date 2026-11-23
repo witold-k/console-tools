@@ -28,6 +28,12 @@ def target_dir() -> Path:
     return Path(json.loads(result.stdout)["target_directory"])
 
 
+def temporary_dir(prefix):
+    target = target_dir()
+    target.mkdir(parents=True, exist_ok=True)
+    return tempfile.TemporaryDirectory(prefix=prefix, dir=target)
+
+
 def verify(baseline: Path, candidate: Path) -> None:
     with zipfile.ZipFile(candidate) as archive:
         manifest = archive.read("META-INF/MANIFEST.MF")
@@ -53,7 +59,7 @@ def verify(baseline: Path, candidate: Path) -> None:
     test_standalone(candidate, "cptx")
     test_desktop_failures(candidate)
     # Run WASI fault and partial-write checks against optimized classes.
-    with tempfile.TemporaryDirectory(prefix="cptx-proguard-fault-") as directory:
+    with temporary_dir("cptx-proguard-fault-") as directory:
         stage = Path(directory)
         with zipfile.ZipFile(candidate) as archive:
             archive.extractall(stage)
@@ -138,7 +144,7 @@ def main() -> None:
             f"-keep{',allowshrinking,allowoptimization' if args.relaxed_keep else ''} class org.wasm2jar.** {{ *; }}",
             *flags,
         ]
-        with tempfile.TemporaryDirectory(prefix="cptx-proguard-") as directory:
+        with temporary_dir("cptx-proguard-") as directory:
             config = Path(directory) / "config.pro"
             config.write_text("\n".join(rules) + "\n", encoding="utf-8")
             result = subprocess.run([proguard, f"@{config}"], cwd=ROOT,

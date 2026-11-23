@@ -26,6 +26,13 @@ def target_dir():
     return Path(json.loads(metadata)["target_directory"])
 
 
+
+def temporary_dir(prefix):
+    target = target_dir()
+    target.mkdir(parents=True, exist_ok=True)
+    return tempfile.TemporaryDirectory(prefix=prefix, dir=target)
+
+
 def optimize(tool, baseline, output, keep_mode="minimal", deep_verify=False):
     if not baseline.is_file():
         raise FileNotFoundError(baseline)
@@ -83,7 +90,7 @@ def optimize(tool, baseline, output, keep_mode="minimal", deep_verify=False):
         f"{keep_generated} org.wasm2jar.** {{ *; }}",
         # ProGuard can still shrink unreachable Java library classes.
     ]
-    with tempfile.TemporaryDirectory(prefix=f"{tool}-proguard-") as tmp:
+    with temporary_dir(f"{tool}-proguard-") as tmp:
         config = Path(tmp) / "rules.pro"
         config.write_text("\n".join(rules) + "\n", encoding="utf-8")
         result = subprocess.run([proguard, f"@{config}"], cwd=ROOT,
@@ -93,7 +100,7 @@ def optimize(tool, baseline, output, keep_mode="minimal", deep_verify=False):
     test_standalone(output, tool)
     if deep_verify and tool == "cptx":
         test_desktop_failures(output)
-        with tempfile.TemporaryDirectory(prefix="cptx-proguard-verify-") as tmp:
+        with temporary_dir("cptx-proguard-verify-") as tmp:
             stage = Path(tmp)
             with zipfile.ZipFile(output) as jar:
                 jar.extractall(stage)

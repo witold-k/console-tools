@@ -481,7 +481,7 @@ checkout; `install` changes the locally installed binaries. JVM builds use
 | `just wasm2jar-test-cptx` | Test translated cptx including desktop clipboard roundtrip |
 | `just wasm2jar-test-xcat` | Test translated xcat JVM help, scan, config, clipboard and `-e`/`-r` task execution |
 | `just wasm2jar-test-all` | Run both wasm2jar test paths |
-| `just jvm-target-dir` | Prepare backend-local target directory |
+| `just jvm-target-dir` | Print Cargo’s effective target directory without creating directories |
 | `just jvm-setup` | Install/setup `cargo-jvm` and run doctor |
 | `just build-jvm` | Package, optimize with ProGuard, smoke-test and print both final JAR sizes |
 | `just jvm-package` | Package original JVM release JARs |
@@ -495,7 +495,8 @@ checkout; `install` changes the locally installed binaries. JVM builds use
 ### JVM distribution layouts
 
 `just jvm-distributions` depends on `jvm-package`, so it rebuilds both
-original release JARs before preparing the distributions:
+original release JARs before preparing the distributions. All paths below are
+located inside the effective Cargo target directory (`cargo metadata --no-deps --format-version 1`):
 
 ```text
 target/jvm-package/release/
@@ -520,10 +521,11 @@ the applications (for example, tmux and clipboard utilities).
 
 ```sh
 just jvm-distributions
-java -jar target/jvm-dist/thin/xcat.jar --help
-java -jar target/jvm-dist/thin/cptx.jar --help
-java -jar target/jvm-dist/standalone/xcat.jar --help
-java -jar target/jvm-dist/standalone/cptx.jar --help
+CARGO_TARGET=$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')
+java -jar "$CARGO_TARGET/jvm-dist/thin/xcat.jar" --help
+java -jar "$CARGO_TARGET/jvm-dist/thin/cptx.jar" --help
+java -jar "$CARGO_TARGET/jvm-dist/standalone/xcat.jar" --help
+java -jar "$CARGO_TARGET/jvm-dist/standalone/cptx.jar" --help
 
 # Or build and smoke-test all four in one command:
 just jvm-test-distributions
@@ -534,16 +536,17 @@ just jvm-test-distributions
 `just build-jvm` is the experimental JVM pipeline: it packages both programs, creates thin and standalone distributions, shrinks standalone JARs with ProGuard, compares basic CLI behavior with the original JARs, and prints final paths and sizes. `just rbuild` also invokes `wasm2jar-test-all` (including the WASI builds and JVM translation tests); the separate `build-jvm` command uses the older `rustc_codegen_jvm` backend. ProGuard is provisioned automatically when necessary. For compilation only, use `python3 scripts/jvm.py build`.
 
 
-`just build-jvm` automatically downloads and caches pinned **ProGuard 7.10.0** under `target/tools/` when the system ProGuard is missing or older than 7.8 (required for Java 25). No system-wide installation is needed. Set `PROGUARD=/path/to/proguard` to override the executable. A full JDK with `jmods` and network access on first download are required. ProGuard reads the standalone JARs and uses the JDK modules as library inputs:
+`just build-jvm` automatically downloads and caches pinned **ProGuard 7.10.0** under `<Cargo target directory>/tools/` when the system ProGuard is missing or older than 7.8 (required for Java 25). No system-wide installation is needed. Set `PROGUARD=/path/to/proguard` to override the executable. A full JDK with `jmods` and network access on first download are required. ProGuard reads the standalone JARs and uses the JDK modules as library inputs:
 
 ```sh
 just jvm-proguard
-du -h target/jvm-dist/standalone/*.jar target/jvm-dist/proguard/*.jar
+CARGO_TARGET=$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')
+du -h "$CARGO_TARGET"/jvm-dist/standalone/*.jar "$CARGO_TARGET"/jvm-dist/proguard/*.jar
 just jvm-test-proguard
 ```
 
-The additional outputs are `target/jvm-dist/proguard/xcat.jar` and
-`target/jvm-dist/proguard/cptx.jar`. The original, thin, and standalone
+The additional outputs are `<Cargo target directory>/jvm-dist/proguard/xcat.jar` and
+`<Cargo target directory>/jvm-dist/proguard/cptx.jar`. The original, thin, and standalone
 artifacts remain unchanged. ProGuard uses five optimization passes,
 shrinking, access modification, aggressive interface merging, and
 obfuscation. It retains the Java entry points and backend runtime classes
@@ -729,3 +732,18 @@ functional regression tests to pass.
 invalid UTF-8 is detected, whereas desktop clipboard capture validates the
 whole input before invoking the clipboard. This behavior predates ProGuard
 and remains a separate correctness consideration.
+
+
+### Build output and temporary directory policy
+
+Python build helpers resolve the same Cargo target directory as `cargo metadata`
+(including a parent workspace or `CARGO_TARGET_DIR` override). JVM packaging,
+ProGuard downloads, coverage reports, WASI/JVM test staging, and temporary
+fixtures use that directory rather than creating `<repo>/target` or unrelated
+system-temporary trees. Short-lived fixtures are removed when their command
+exits; downloaded ProGuard remains cached under `<Cargo target directory>/tools`.
+Read-only commands such as `just jvm-target-dir` do not create directories.
+
+Older directories created by previous versions, such as `<repo>/target` or
+`~/.local/share/cargo-jvm/rustc_codegen_jvm/target/release`, are *not*
+automatically deleted: inspect them before removing any local data.

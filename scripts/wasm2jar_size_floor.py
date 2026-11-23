@@ -53,7 +53,8 @@ def main() -> None:
     if not baseline.is_file():
         raise FileNotFoundError(f"{baseline}; run just build-wasm")
     rows = []
-    with tempfile.TemporaryDirectory(prefix="wasm2jar-size-floor-") as directory:
+    target_dir().mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="wasm2jar-size-floor-", dir=target_dir()) as directory:
         tmp = Path(directory)
         for name, code in [*FIXTURES.items(), ("ACTUAL_cptx", None)]:
             wasm = tmp / f"{name}.wasm"
