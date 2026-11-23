@@ -145,8 +145,52 @@ TOOLCHAIN = "nightly-2026-11-21"
 HOST = "x86_64-unknown-linux-gnu"
 
 
+def check_toolchain(release=False):
+    """Fail early with actionable diagnostics for a broken pinned toolchain."""
+    setup = "just wasm-nightly-setup"
+    rustc = subprocess.run(
+        ["rustc", f"+{TOOLCHAIN}", "-vV"],
+        capture_output=True, text=True, check=False,
+    )
+    if rustc.returncode != 0:
+        print(
+            f"Rust toolchain {TOOLCHAIN} is missing or broken.\n"
+            f"Repair it with:\n"
+            f"  rustup toolchain uninstall {TOOLCHAIN}\n"
+            f"  {setup}\n"
+            f"Original error:\n{rustc.stderr.strip()}",
+            file=sys.stderr,
+        )
+        return False
+
+    if not release:
+        return True
+
+    checks = [
+        (["rustup", "component", "list", "--installed", "--toolchain", TOOLCHAIN],
+         "rust-src"),
+        (["rustup", "target", "list", "--installed", "--toolchain", TOOLCHAIN],
+         HOST),
+    ]
+    for command, required in checks:
+        result = subprocess.run(command, capture_output=True, text=True, check=False)
+        installed = result.stdout.splitlines()
+        if result.returncode != 0 or not any(line == required or line.startswith(required + "-") for line in installed):
+            print(
+                f"Rust toolchain {TOOLCHAIN} requires {required} for the release build.\n"
+                f"Install missing components with:\n  {setup}\n"
+                f"{result.stderr.strip()}",
+                file=sys.stderr,
+            )
+            return False
+    return True
+
+
 def build(release=False):
     """Build, test and lint; capture pane on failure."""
+    if not check_toolchain(release=release):
+        return 1
+
     cargo_flags = ["--release"] if release else []
     native_build = (["cargo", f"+{TOOLCHAIN}", "-Z", "panic-immediate-abort",
                      "-Z", "build-std=std,panic_abort",
